@@ -258,5 +258,62 @@ class Ledger:
 
         return "\n".join(lines)
 
+    def coverage_summary(self) -> list[dict]:
+        """
+        Return per-(template, timeframe) attempt counts for all valid runs.
+
+        Used by the orchestrator to inject exploration-pressure context into the
+        prompt: the LLM should see which (template, timeframe) cells have been
+        attempted many times without success and which are under-explored.
+
+        Each entry: {template, timeframe, attempts, scored, best_score}.
+        `timeframe` is pulled from params.timeframe (false_breakout) or
+        params.short_tf (triple_screen); runs without either are skipped.
+        """
+        cur = self._conn.execute(
+            "SELECT template, config_json, backtest_status, score FROM runs "
+            "WHERE validation_status = 'valid' AND config_json IS NOT NULL"
+        )
+        buckets: dict[tuple[str, str], dict] = {}
+        for template, cfg_json, status, score in cur.fetchall():
+            if not template:
+                continue
+            try:
+                params = json.loads(cfg_json).get("params", {})
+            except (json.JSONDecodeError, TypeError):
+                continue
+            tf = params.get("timeframe") or params.get("short_tf")
+            if not tf:
+                continue
+            key = (template, tf)
+            b = buckets.setdefault(key, {"attempts": 0, "scored": 0, "best_score": None})
+            b["attempts"] += 1
+            if status == "scored":
+                b["scored"] += 1
+                if score is not None and (b["best_score"] is None or score > b["best_score"]):
+                    b["best_score"] = score
+
+        result = []
+        for (tmpl, tf), b in sorted(buckets.items()):
+            result.append({"template": tmpl, "timeframe": tf, **b})
+        return result
+
+    def format_coverage(self) -> str:
+        """
+        Format coverage_summary() as a compact text block for prompt injection.
+        Returns empty string if no valid runs exist yet.
+        """
+        rows = self.coverage_summary()
+        if not rows:
+            return ""
+        lines = ["EXPLORATION COVERAGE (valid attempts across all history):"]
+        for r in rows:
+            best = f"{r['best_score']:.0f}" if r["best_score"] is not None else "—"
+            lines.append(
+                f"  {r['template']:<16} × {r['timeframe']:<3}  "
+                f"attempts={r['attempts']:<3}  scored={r['scored']:<3}  best={best}"
+            )
+        return "\n".join(lines)
+
     def close(self) -> None:
         self._conn.close()

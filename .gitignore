@@ -24,3 +24,6 @@ logs/
 
 # OS
 .DS_Store
+
+# Claude Code runtime
+.claude/

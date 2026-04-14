@@ -182,3 +182,85 @@ def test_format_sliding_window_securities_stripped(ledger):
     text = ledger.format_sliding_window()
     assert "BTC,ETH" in text
     assert "PERP" not in text
+
+
+# ---------------------------------------------------------------------------
+# coverage_summary / format_coverage
+# ---------------------------------------------------------------------------
+
+def test_coverage_summary_empty(ledger):
+    assert ledger.coverage_summary() == []
+
+
+def test_coverage_summary_counts_attempts_per_cell(ledger):
+    ledger.log(_scored_record(
+        template="false_breakout",
+        config_json='{"params":{"timeframe":"4h"}}',
+        score=50.0,
+    ))
+    ledger.log(_scored_record(
+        template="false_breakout",
+        config_json='{"params":{"timeframe":"4h"}}',
+        backtest_status="rejected",
+        score=None,
+    ))
+    ledger.log(_scored_record(
+        template="triple_screen",
+        config_json='{"params":{"short_tf":"1h"}}',
+        score=30.0,
+    ))
+
+    rows = ledger.coverage_summary()
+    assert len(rows) == 2
+
+    fb = next(r for r in rows if r["template"] == "false_breakout")
+    assert fb["timeframe"] == "4h"
+    assert fb["attempts"] == 2
+    assert fb["scored"] == 1
+    assert fb["best_score"] == 50.0
+
+    ts = next(r for r in rows if r["template"] == "triple_screen")
+    assert ts["timeframe"] == "1h"
+    assert ts["attempts"] == 1
+    assert ts["best_score"] == 30.0
+
+
+def test_coverage_summary_tracks_best_score(ledger):
+    for s in [20.0, 80.0, 45.0]:
+        ledger.log(_scored_record(
+            template="false_breakout",
+            config_json='{"params":{"timeframe":"1d"}}',
+            score=s,
+        ))
+    rows = ledger.coverage_summary()
+    assert rows[0]["best_score"] == 80.0
+    assert rows[0]["attempts"] == 3
+    assert rows[0]["scored"] == 3
+
+
+def test_coverage_summary_ignores_invalid_runs(ledger):
+    ledger.log(_scored_record(validation_status="invalid_schema", score=None))
+    ledger.log(_scored_record(validation_status="system_error", score=None))
+    assert ledger.coverage_summary() == []
+
+
+def test_coverage_summary_skips_records_without_timeframe(ledger):
+    ledger.log(_scored_record(config_json='{"params":{}}'))
+    assert ledger.coverage_summary() == []
+
+
+def test_format_coverage_empty_on_cold_start(ledger):
+    assert ledger.format_coverage() == ""
+
+
+def test_format_coverage_includes_cells(ledger):
+    ledger.log(_scored_record(
+        template="false_breakout",
+        config_json='{"params":{"timeframe":"4h"}}',
+        score=50.0,
+    ))
+    text = ledger.format_coverage()
+    assert "EXPLORATION COVERAGE" in text
+    assert "false_breakout" in text
+    assert "4h" in text
+    assert "attempts=1" in text

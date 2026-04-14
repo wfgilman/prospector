@@ -351,6 +351,20 @@ def test_assemble_prompt_no_stagnation_note():
     assert "Explore a different template." not in text
 
 
+def test_assemble_prompt_includes_coverage_when_provided():
+    coverage = "EXPLORATION COVERAGE (valid attempts):\n  false_breakout × 4h  attempts=5"
+    text = assemble_prompt("window", ["BTC-PERP"], coverage_text=coverage)
+    assert "EXPLORATION COVERAGE" in text
+    assert "attempts=5" in text
+
+
+def test_assemble_prompt_omits_coverage_when_empty():
+    """With no coverage data, the coverage block header should not appear —
+    only the preamble's reference to the coverage section remains."""
+    text = assemble_prompt("window", ["BTC-PERP"], coverage_text="")
+    assert "EXPLORATION COVERAGE (valid attempts" not in text
+
+
 # ---------------------------------------------------------------------------
 # run_one_iteration (mocked)
 # ---------------------------------------------------------------------------

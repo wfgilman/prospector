@@ -157,8 +157,13 @@ Rules:
 - Securities must come from the universe listed below.
 - Your proposal must be materially different from recent results — do not repeat or make \
 minor tweaks to failed configs.
+- Actively explore the full search space. If you keep returning to the same template, \
+you are not exploring — try the OTHER template. If one (template, timeframe) cell has \
+many attempts and few scored runs, try a DIFFERENT cell before retrying that one.
+- Use the EXPLORATION COVERAGE table (below) to prioritize cells with few attempts. \
+Cells with attempts=0 or scored=0 are prime candidates for a fresh proposal.
 - The "rationale" field is important. Explain your reasoning: what pattern you see in \
-recent results and why your proposal addresses it.\
+recent results, which coverage cells you're targeting, and why.\
 """
 
 _REGISTRY = """\
@@ -251,6 +256,7 @@ def assemble_prompt(
     sliding_window_text: str,
     securities: list[str],
     stagnation_note: str | None = None,
+    coverage_text: str = "",
 ) -> str:
     """
     Build the full prompt from static sections and dynamic content.
@@ -261,20 +267,27 @@ def assemble_prompt(
         securities:          Available trading pairs for this session.
         stagnation_note:     Optional nudge injected when last N proposals reuse
                              the same template.
+        coverage_text:       Optional (template, timeframe) coverage summary from
+                             Ledger.format_coverage(). Empty string on cold start.
     """
     universe = ", ".join(securities)
     recent_section = f"RECENT RESULTS (most recent first):\n{sliding_window_text}"
     if stagnation_note:
         recent_section += f"\n\n{stagnation_note}"
 
-    return "\n\n".join([
+    sections = [
         _PREAMBLE,
         _REGISTRY,
         f"SECURITIES (choose one or more):\n{universe}",
+    ]
+    if coverage_text:
+        sections.append(coverage_text)
+    sections.extend([
         recent_section,
         _OUTPUT_FORMAT,
         _EXAMPLES,
     ])
+    return "\n\n".join(sections)
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +304,7 @@ def call_model(prompt: str, config: AppConfig) -> str:
         "prompt": prompt,
         "stream": False,
         "options": {
-            "temperature": 0.7,
+            "temperature": 1.0,
             "num_predict": 1024,
         },
     }
@@ -726,7 +739,8 @@ def run_one_iteration(ledger: Ledger, config: AppConfig) -> RunRecord:
 
     # --- Prompt assembly ---
     window_text = ledger.format_sliding_window(config.sliding_window_size)
-    prompt = assemble_prompt(window_text, config.securities, stagnation_note)
+    coverage_text = ledger.format_coverage()
+    prompt = assemble_prompt(window_text, config.securities, stagnation_note, coverage_text)
 
     # --- LLM call ---
     try:

@@ -14,6 +14,9 @@ Entry point: python -m prospector.orchestrator
 Configuration via environment variables:
   PROSPECTOR_MODEL   Ollama model name (default: qwen2.5-coder:14b)
   OLLAMA_HOST        Ollama base URL (default: http://localhost:11434)
+  PROSPECTOR_MOCK    If set to 1/true/yes, bypass Ollama and emit random
+                     schema-valid proposals (for shaking out the loop without
+                     a running model server).
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,6 +58,7 @@ class AppConfig:
     stagnation_n: int = 5          # Consecutive same-template proposals → nudge
     db_path: Path = field(default_factory=lambda: _REPO_ROOT / "data" / "prospector.db")
     data_dir: Path = field(default_factory=lambda: _REPO_ROOT / "data" / "ohlcv")
+    mock_model: bool = False       # Bypass Ollama and emit random valid proposals
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -61,6 +66,7 @@ class AppConfig:
         return cls(
             model=os.environ.get("PROSPECTOR_MODEL", "qwen2.5-coder:14b"),
             ollama_host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
+            mock_model=os.environ.get("PROSPECTOR_MOCK", "").lower() in ("1", "true", "yes"),
         )
 
 
@@ -276,6 +282,9 @@ def assemble_prompt(
 
 def call_model(prompt: str, config: AppConfig) -> str:
     """Call the Ollama /api/generate endpoint. Returns the raw response text."""
+    if config.mock_model:
+        return _mock_model_response(prompt, config.securities)
+
     payload = {
         "model": config.model,
         "prompt": prompt,
@@ -292,6 +301,54 @@ def call_model(prompt: str, config: AppConfig) -> str:
     )
     resp.raise_for_status()
     return resp.json()["response"]
+
+
+def _mock_model_response(prompt: str, securities: list[str]) -> str:
+    """
+    Return a JSON-stringified proposal for one of the implemented templates with
+    randomized but schema-valid params and a random non-empty subset of the
+    available securities. Used when PROSPECTOR_MOCK is set so the loop can be
+    exercised end-to-end without a running Ollama instance.
+    """
+    template = random.choice(sorted(IMPLEMENTED_TEMPLATES))
+
+    if template == "false_breakout":
+        params: dict[str, Any] = {
+            "timeframe": random.choice(["1d", "4h", "1h"]),
+            "range_lookback": random.randint(15, 60),
+            "range_threshold": round(random.uniform(0.01, 0.10), 3),
+            "confirmation_bars": random.randint(1, 3),
+            "volume_filter": random.choice([True, False]),
+        }
+    elif template == "triple_screen":
+        long_tf = random.choice(["1w", "1d"])
+        # short_tf must be strictly shorter than long_tf
+        short_choices = [tf for tf in ("1d", "4h", "1h") if _TF_RANK[tf] < _TF_RANK[long_tf]]
+        slow = random.randint(20, 50)
+        # fast_ema schema bounds [5, 25] AND must be < slow_ema
+        fast = random.randint(5, min(25, slow - 1))
+        params = {
+            "long_tf": long_tf,
+            "short_tf": random.choice(short_choices),
+            "slow_ema": slow,
+            "fast_ema": fast,
+            "oscillator": random.choice(["force_index_2", "stochastic", "rsi"]),
+            "osc_entry_threshold": round(random.uniform(10.0, 90.0), 1),
+        }
+    else:
+        raise RuntimeError(f"Mock model has no generator for template {template!r}")
+
+    n_sec = random.randint(1, len(securities))
+    chosen = random.sample(securities, n_sec)
+
+    proposal = {
+        "thinking": "Mock model: randomized proposal for end-to-end loop testing.",
+        "template": template,
+        "params": params,
+        "securities": chosen,
+        "rationale": f"Mock proposal exploring {template} on {','.join(chosen)}.",
+    }
+    return json.dumps(proposal)
 
 
 # ---------------------------------------------------------------------------
@@ -523,8 +580,11 @@ def _params_match(a: dict, b: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 def _coin_from_security(security: str) -> str:
-    """Extract base coin name from a security symbol (e.g. 'BTC-PERP' → 'BTC')."""
-    return security.split("-")[0]
+    """
+    Map a security symbol to its OHLCV directory name (e.g. 'BTC-PERP' → 'BTC_PERP').
+    Matches the convention used by `prospector.data.download._parquet_path`.
+    """
+    return security.replace("-", "_")
 
 
 def _load_ohlcv(coin: str, timeframe: str, data_dir: Path) -> pd.DataFrame:

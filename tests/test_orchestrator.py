@@ -17,6 +17,7 @@ from prospector.ledger import Ledger, RunRecord
 from prospector.orchestrator import (
     AppConfig,
     _aggregate,
+    _mock_model_response,
     _params_match,
     assemble_prompt,
     parse_response,
@@ -402,6 +403,20 @@ def test_run_one_iteration_valid_scored(ledger, tmp_path):
     assert record.score == pytest.approx(55.0)
     assert record.run_id is not None
     assert ledger.count() == 1
+
+
+# ---------------------------------------------------------------------------
+# _mock_model_response
+# ---------------------------------------------------------------------------
+
+def test_mock_model_response_always_validates(ledger, universe):
+    """Every mock proposal must parse and pass validate_config."""
+    securities = sorted(universe)
+    for _ in range(50):
+        raw = _mock_model_response("ignored prompt", securities)
+        proposal = parse_response(raw)
+        ok, reason = validate_config(proposal, set(securities), ledger)
+        assert ok, f"Mock produced invalid proposal: {reason} | proposal={proposal}"
 
 
 def test_run_one_iteration_invalid_schema_logged(ledger, tmp_path):

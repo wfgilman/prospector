@@ -142,6 +142,7 @@ The main loop that coordinates LLM proposal, validation, backtesting, and loggin
 - Only `triple_screen` and `false_breakout` are shown in the prompt registry (unimplemented templates are excluded). Expand `_REGISTRY` in `orchestrator.py` as new templates are implemented.
 - Diversity check is exact match only (first version). Normalized distance from the spec is deferred.
 - Entry point: `python -m prospector.orchestrator`
+- Mock model mode: set `PROSPECTOR_MOCK=1` to bypass Ollama and emit random schema-valid proposals. Useful for shaking out loop mechanics without a running model server.
 
 **Files:** `src/prospector/orchestrator.py`
 **Tests:** `tests/test_orchestrator.py`

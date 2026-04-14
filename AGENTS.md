@@ -95,6 +95,9 @@ python -m prospector.data.download
 
 # Start orderbook poller manually (normally managed by launchd)
 python -m prospector.data.orderbook
+
+# Run the inner loop without Ollama (random schema-valid proposals)
+PROSPECTOR_MOCK=1 python -m prospector.orchestrator
 ```
 
 **Target pairs (POC):** BTC-PERP, ETH-PERP, SOL-PERP
@@ -135,7 +138,7 @@ launchctl start com.prospector.orderbook
 
 **Orchestrator prompt: only implemented templates.** The prompt registry shown to the LLM lists only `triple_screen` and `false_breakout` (the two implemented ones). Proposals for unimplemented templates are caught by `validate_config` and rejected as `invalid_schema`. Add templates to `_REGISTRY` in `orchestrator.py` as they are implemented.
 
-**Orchestrator config via env vars.** `PROSPECTOR_MODEL` (default `qwen2.5-coder:14b`) and `OLLAMA_HOST` (default `http://localhost:11434`). No config file; override in the environment.
+**Orchestrator config via env vars.** `PROSPECTOR_MODEL` (default `qwen2.5-coder:14b`), `OLLAMA_HOST` (default `http://localhost:11434`), and `PROSPECTOR_MOCK` (set to `1`/`true`/`yes` to bypass Ollama and emit random schema-valid proposals — useful for shaking out the loop without a model server). No config file; override in the environment.
 
 **Multi-security aggregation.** Per-security backtests run independently with separate $10k NAV. Aggregate: any catastrophic → catastrophic; all rejected → rejected; otherwise mean of scored results. Per-security breakdown stored as JSON blob in `securities_results_json` column.
 
@@ -149,7 +152,8 @@ launchctl start com.prospector.orderbook
 - **Train/test/holdout split not yet implemented.** The data layer downloads raw OHLCV but does not partition it into train/test/holdout windows. This is required before the backtest harness is complete.
 - **`DATA_DIR` uses `parents[3]` in data modules, `parents[2]` in orchestrator.** `download.py` and `orderbook.py` are one level deeper (`src/prospector/data/`) so they use `parents[3]`. `orchestrator.py` is at `src/prospector/` and uses `parents[2]`. Both resolve to the repo root.
 - **`pytest` must use `PYTHONPATH=src`** in the project root. Tests import `prospector.*` which requires the `src/` layout to be on the path.
-- **Orchestrator needs Ollama running.** `python -m prospector.orchestrator` will fail with a connection error if Ollama is not running. Start it with `ollama serve` and pull the model: `ollama pull qwen2.5-coder:14b`.
+- **Orchestrator needs Ollama running.** `python -m prospector.orchestrator` will fail with a connection error if Ollama is not running. Start it with `ollama serve` and pull the model: `ollama pull qwen2.5-coder:14b`. To exercise the loop without Ollama, set `PROSPECTOR_MOCK=1`.
+- **OHLCV directory naming.** The download script writes to `data/ohlcv/<COIN>_PERP/<timeframe>.parquet` (full symbol with hyphens replaced by underscores), not `data/ohlcv/<COIN>/`. The orchestrator's `_coin_from_security` mirrors this convention via `replace("-", "_")`.
 - **OHLCV data must be downloaded before running the orchestrator.** The orchestrator loads parquet files from `data/ohlcv/<COIN>/<timeframe>.parquet`. Run `python -m prospector.data.download` first.
 
 ---

@@ -19,13 +19,13 @@ The full design is in `docs/trading-strategy-discovery-synopsis.md`. The build p
 | 1 | Data Layer: OHLCV download + orderbook poller | **Complete** (caveats below) |
 | 2 | Strategy Templates | **Partial** — `triple_screen`, `false_breakout` done; 4 remaining |
 | 3 | Backtest Harness | **Complete** |
-| 4 | Orchestrator / Inner Loop | Not started |
-| 5 | Ledger and Persistence | Not started |
+| 4 | Orchestrator / Inner Loop | **Complete** (skeleton) |
+| 5 | Ledger and Persistence | **Complete** |
 | 6 | Dashboard | Not started |
 | 7 | Paper Trading | Not started |
 | 8 | Live Execution | Not started |
 
-**Immediate next task:** Complete the remaining 4 strategy templates (`impulse_system`, `channel_fade`, `kangaroo_tail`, `ema_divergence`), then build the ledger (unit 5) and orchestrator (unit 4).
+**Immediate next task:** Run `python -m prospector.orchestrator` end-to-end against real Ollama to shake out any runtime issues. Then complete the remaining 4 strategy templates (`impulse_system`, `channel_fade`, `kangaroo_tail`, `ema_divergence`) to widen the search space.
 
 ---
 
@@ -41,16 +41,25 @@ prospector/
 │       │   ├── client.py      ← HyperliquidClient (sync httpx)
 │       │   ├── download.py    ← OHLCV download script
 │       │   └── orderbook.py   ← live L2 WebSocket poller
-│       └── templates/
-│           ├── base.py        ← Signal, Direction, MIN_REWARD_RISK, validate_ohlcv
-│           ├── triple_screen.py
-│           └── false_breakout.py
+│       ├── templates/
+│       │   ├── base.py        ← Signal, Direction, MIN_REWARD_RISK, validate_ohlcv
+│       │   ├── triple_screen.py
+│       │   └── false_breakout.py
+│       ├── harness/
+│       │   ├── engine.py      ← run_backtest, BacktestConfig, BacktestResult, compute_score
+│       │   └── walk_forward.py ← run_walk_forward, WalkForwardResult
+│       ├── ledger.py          ← RunRecord, Ledger (SQLite append-only log)
+│       └── orchestrator.py   ← run_loop, run_one_iteration, validate_config, assemble_prompt
 ├── tests/
 │   ├── data/
 │   │   └── test_download.py
-│   └── templates/
-│       ├── test_base.py
-│       └── test_false_breakout.py
+│   ├── templates/
+│   │   ├── test_base.py
+│   │   └── test_false_breakout.py
+│   ├── harness/
+│   │   └── test_engine.py
+│   ├── test_ledger.py
+│   └── test_orchestrator.py
 ├── data/
 │   ├── ohlcv/                 ← parquet files, one per coin/timeframe
 │   └── orderbook/             ← parquet files, one per coin per day
@@ -124,15 +133,24 @@ launchctl start com.prospector.orderbook
 
 **Signal geometry validation.** `Signal` is a frozen dataclass. `__post_init__` raises `ValueError` for invalid geometry (stop ≥ entry for LONG, etc.). Templates catch this and skip the signal.
 
+**Orchestrator prompt: only implemented templates.** The prompt registry shown to the LLM lists only `triple_screen` and `false_breakout` (the two implemented ones). Proposals for unimplemented templates are caught by `validate_config` and rejected as `invalid_schema`. Add templates to `_REGISTRY` in `orchestrator.py` as they are implemented.
+
+**Orchestrator config via env vars.** `PROSPECTOR_MODEL` (default `qwen2.5-coder:14b`) and `OLLAMA_HOST` (default `http://localhost:11434`). No config file; override in the environment.
+
+**Multi-security aggregation.** Per-security backtests run independently with separate $10k NAV. Aggregate: any catastrophic → catastrophic; all rejected → rejected; otherwise mean of scored results. Per-security breakdown stored as JSON blob in `securities_results_json` column.
+
+**Diversity check (first version): exact match only.** A proposal is a duplicate if same template + same securities (order-independent) + identical params dict against any run in the recent sliding window. The normalized-distance approach from the spec is deferred.
+
 ---
 
 ## Known Gotchas
 
 - **MacBook sleep interrupts the orderbook stream.** The reconnect loop in `orderbook.py` handles wake-up gracefully (5s delay, retry). Data will have gaps during sleep periods. "24/7" collection requires either preventing sleep (System Preferences → Energy Saver → "Prevent Mac from sleeping") or accepting gaps.
 - **Train/test/holdout split not yet implemented.** The data layer downloads raw OHLCV but does not partition it into train/test/holdout windows. This is required before the backtest harness is complete.
-- **Backtrader not yet evaluated.** It's listed in the tech stack but the harness hasn't been built. Evaluate at unit 3 implementation time; migrate if it becomes a constraint.
-- **`DATA_DIR` uses `parents[3]`.** Both `download.py` and `orderbook.py` resolve data paths with `Path(__file__).resolve().parents[3] / "data" / ...`. This resolves to the repo root. Using `parents[4]` was a bug (now fixed) that wrote data to the parent of the workspace.
+- **`DATA_DIR` uses `parents[3]` in data modules, `parents[2]` in orchestrator.** `download.py` and `orderbook.py` are one level deeper (`src/prospector/data/`) so they use `parents[3]`. `orchestrator.py` is at `src/prospector/` and uses `parents[2]`. Both resolve to the repo root.
 - **`pytest` must use `PYTHONPATH=src`** in the project root. Tests import `prospector.*` which requires the `src/` layout to be on the path.
+- **Orchestrator needs Ollama running.** `python -m prospector.orchestrator` will fail with a connection error if Ollama is not running. Start it with `ollama serve` and pull the model: `ollama pull qwen2.5-coder:14b`.
+- **OHLCV data must be downloaded before running the orchestrator.** The orchestrator loads parquet files from `data/ohlcv/<COIN>/<timeframe>.parquet`. Run `python -m prospector.data.download` first.
 
 ---
 

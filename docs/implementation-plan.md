@@ -11,13 +11,13 @@ This document defines the implementation units for Prospector, their dependencie
 | 1 | Data Layer | **Complete** (partial) | OHLCV + orderbook done; train/test split pending |
 | 2 | Strategy Templates | **In progress** | `triple_screen`, `false_breakout` done; 4 remaining |
 | 3 | Backtest Harness | **Complete** | |
-| 4 | Orchestrator | Not started | |
-| 5 | Ledger | Not started | Build alongside unit 3 |
+| 4 | Orchestrator | **Complete** (skeleton) | 2 templates active; expand as templates added |
+| 5 | Ledger | **Complete** | SQLite append-only log |
 | 6 | Dashboard | Not started | |
 | 7 | Paper Trading | Not started | |
 | 8 | Live Execution | Not started | |
 
-**Immediate next task:** Complete the 4 remaining strategy templates (`impulse_system`, `channel_fade`, `kangaroo_tail`, `ema_divergence`), then build the backtest harness.
+**Immediate next task:** Run `python -m prospector.orchestrator` end-to-end to verify the skeleton works against real Ollama. Then complete the 4 remaining strategy templates (`impulse_system`, `channel_fade`, `kangaroo_tail`, `ema_divergence`) to widen the search space.
 
 ## Language
 
@@ -123,38 +123,48 @@ The most critical component. Accepts pre-generated `Signal` objects and an OHLCV
 
 ---
 
-### 4. Orchestrator and Inner Loop
+### 4. Orchestrator and Inner Loop ✓ (Skeleton complete)
 
 The main loop that coordinates LLM proposal, validation, backtesting, and logging.
 
 **Deliverables:**
-- Prompt assembly: inject template registry, securities universe, and sliding window into the prompt template (`docs/prompt-template.md`)
-- Ollama integration: call local 13B model, parse JSON response
-- Config validation: check JSON structure, template ID, parameter ranges, diversity vs. recent proposals
-- Dispatch: route validated config to backtest harness
-- Result logging: write complete run record to ledger
-- Sliding window query: fetch last N results from ledger, format as table for prompt injection
-- Error handling: malformed JSON, Ollama timeouts, and validation failures count as wasted iterations (logged, not crashed)
-- Stagnation detection: if last N proposals are all same template or all rejected, inject perturbation into prompt
-- Cold start handling: first iteration has no sliding window — use baseline prompt
+- Prompt assembly: inject template registry, securities universe, and sliding window ✓ (`src/prospector/orchestrator.py:assemble_prompt`)
+- Ollama integration: httpx POST to `/api/generate`, parse JSON response ✓ (`call_model`, `parse_response`)
+- Config validation: template, param schema, cross-param constraints, securities universe, exact-match diversity ✓ (`validate_config`)
+- Dispatch: per-security backtest with multi-security aggregation ✓ (`_dispatch`, `_aggregate`)
+- Result logging: write RunRecord to ledger after every iteration ✓
+- Sliding window query: via `Ledger.format_sliding_window()` ✓
+- Error handling: malformed JSON, Ollama timeouts, and validation failures are caught, logged, and loop continues ✓
+- Stagnation detection: if last N valid proposals all use same template → nudge injected ✓
+- Cold start handling: `Ledger.format_sliding_window()` returns baseline message when empty ✓
+
+**Key decisions:**
+- Only `triple_screen` and `false_breakout` are shown in the prompt registry (unimplemented templates are excluded). Expand `_REGISTRY` in `orchestrator.py` as new templates are implemented.
+- Diversity check is exact match only (first version). Normalized distance from the spec is deferred.
+- Entry point: `python -m prospector.orchestrator`
+
+**Files:** `src/prospector/orchestrator.py`
+**Tests:** `tests/test_orchestrator.py`
 
 **Unblocks:** The autonomous discovery loop. Once this works end-to-end, the system can run unsupervised.
 
 ---
 
-### 5. Ledger and Persistence
+### 5. Ledger and Persistence ✓ (Complete)
 
 SQLite append-only log of every iteration.
 
 **Deliverables:**
-- Schema: run_id, timestamp, template, config (JSON), validation_status, score, all diagnostic metrics, rationale, thinking
-- Query interface: sliding window (last N runs), best configs by score, per-template aggregates
-- Append-only constraint: no updates or deletes on run records
-- Export: dump to CSV/JSON for external analysis
+- Schema: run_id, timestamp, template, config_json, validation_status, backtest_status, score, all diagnostic metrics, rationale, thinking, per-security breakdown (JSON blob) ✓
+- Query interface: `get_sliding_window(n)`, `last_n_templates(n)`, `count()`, `format_sliding_window(n)` ✓
+- Append-only constraint: no updates or deletes on run records ✓ (INSERT only)
+- Export: not yet implemented (deferred — query directly via SQLite CLI or pandas for now)
 
-**Note:** This is simple but foundational. Build it alongside unit 3 (the harness needs somewhere to write results). Listed separately because it's a distinct concern with its own schema.
+**Files:** `src/prospector/ledger.py`
+**Tests:** `tests/test_ledger.py`
+**DB path:** `data/prospector.db` (gitignored via `data/*.db`)
 
-**Unblocks:** Sliding window for orchestrator, dashboard data source.
+**Unblocks:** Sliding window for orchestrator ✓, dashboard data source.
 
 ---
 

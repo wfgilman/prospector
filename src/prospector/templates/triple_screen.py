@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from prospector.templates.base import Direction, MIN_REWARD_RISK, Signal, validate_ohlcv
+from prospector.templates.base import MIN_REWARD_RISK, Direction, Signal, validate_ohlcv
 
 # ---------------------------------------------------------------------------
 # Indicator helpers
@@ -91,20 +91,6 @@ def _trend(df_long: pd.DataFrame, slow_ema_period: int, fast_ema_period: int) ->
 # Signal generation
 # ---------------------------------------------------------------------------
 
-def _align_long_tf_to_short(
-    df_long: pd.DataFrame,
-    df_short: pd.DataFrame,
-) -> pd.Series:
-    """
-    For each short-TF bar, look up the most recent completed long-TF bar trend value.
-    Returns a Series indexed like df_short.
-    """
-    # We'll use merge_asof to align timestamps.
-    trend_long = _trend(df_long, slow_ema_period=1, fast_ema_period=1)  # placeholder; replaced below
-    # This function is called with pre-computed trend passed in; see run().
-    raise NotImplementedError("Use run() directly.")
-
-
 def run(
     df_long: pd.DataFrame,
     df_short: pd.DataFrame,
@@ -160,7 +146,9 @@ def run(
             continue
 
         is_oversold = osc_val < osc_threshold
-        is_overbought = osc_val > (100 - osc_threshold) if osc_name != "force_index_2" else osc_val > 0
+        is_overbought = (
+            osc_val > (100 - osc_threshold) if osc_name != "force_index_2" else osc_val > 0
+        )
 
         if trend == 1 and is_oversold:
             # Long: enter one tick above prior bar's high.

@@ -7,7 +7,6 @@ These tests mock the Hyperliquid API client so no network calls are made.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -19,7 +18,6 @@ from prospector.data.download import (
     _parquet_path,
     download_pair,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helper factories

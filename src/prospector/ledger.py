@@ -130,11 +130,25 @@ class Ledger:
         record.run_id = run_id
         return run_id
 
-    def get_sliding_window(self, n: int = 10) -> list[RunRecord]:
-        """Return the last n runs, most recent first."""
-        cur = self._conn.execute(
-            "SELECT * FROM runs ORDER BY run_id DESC LIMIT ?", (n,)
-        )
+    def get_sliding_window(
+        self, n: int = 10, exclude_system_errors: bool = False
+    ) -> list[RunRecord]:
+        """Return the last n runs, most recent first.
+
+        Args:
+            n: Maximum number of records to return.
+            exclude_system_errors: If True, skip rows with validation_status='system_error'.
+                Use this for prompt injection — Ollama failures carry no signal for the model.
+        """
+        if exclude_system_errors:
+            query = (
+                "SELECT * FROM runs "
+                "WHERE validation_status != 'system_error' "
+                "ORDER BY run_id DESC LIMIT ?"
+            )
+        else:
+            query = "SELECT * FROM runs ORDER BY run_id DESC LIMIT ?"
+        cur = self._conn.execute(query, (n,))
         col_names = [d[0] for d in cur.description]
         records: list[RunRecord] = []
         for row in cur.fetchall():
@@ -189,7 +203,7 @@ class Ledger:
         Columns: Run, Template, Securities, Score, Sharpe, PF, WR, Trades, MaxDD, Rationale
         Rejected/invalid rows show a brief reason instead of numeric metrics.
         """
-        records = self.get_sliding_window(n)
+        records = self.get_sliding_window(n, exclude_system_errors=True)
         if not records:
             return (
                 "No prior results. This is the first run. "

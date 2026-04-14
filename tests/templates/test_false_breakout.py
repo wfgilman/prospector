@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from prospector.templates.base import Direction, MIN_REWARD_RISK
+from prospector.templates.base import MIN_REWARD_RISK, Direction
 from prospector.templates.false_breakout import run
 
 
@@ -48,7 +48,6 @@ def test_downside_false_breakout_produces_long():
     Range: low=90, high=110 (20% wide). False break to 87, recovery to 91.
     entry=91, stop=87, target=110 → reward=19, risk=4, R:R=4.75 ✓
     """
-    n = 17
     closes = [100.0] * 10 + [88.0, 91.0] + [100.0] * 5
     lows   = [90.0]  * 10 + [87.0, 90.0] + [90.0]  * 5
     highs  = [110.0] * 10 + [89.0, 92.0] + [110.0] * 5

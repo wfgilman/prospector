@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import random
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -857,6 +858,13 @@ def run_loop(config: AppConfig | None = None, max_iterations: int | None = None)
         f"DB: [cyan]{config.db_path}[/cyan]"
     )
 
+    # Backoff state for consecutive system_error (Ollama unreachable).
+    # Delays: 1–4 consecutive → 30 s; 5+ consecutive → 300 s.
+    _BACKOFF_SHORT = 30
+    _BACKOFF_LONG = 300
+    _BACKOFF_THRESHOLD = 5
+    consecutive_errors = 0
+
     iteration = 0
     try:
         while max_iterations is None or iteration < max_iterations:
@@ -864,6 +872,20 @@ def run_loop(config: AppConfig | None = None, max_iterations: int | None = None)
             console.print(f"\n[dim]--- Iteration {ledger.count() + 1} ---[/dim]")
 
             record = run_one_iteration(ledger, config)
+
+            if record.validation_status == "system_error":
+                consecutive_errors += 1
+                delay = (
+                    _BACKOFF_LONG if consecutive_errors >= _BACKOFF_THRESHOLD else _BACKOFF_SHORT
+                )
+                console.print(
+                    f"  [red]system_error[/red] ({consecutive_errors} consecutive): "
+                    f"{record.error}  — backing off {delay}s"
+                )
+                time.sleep(delay)
+                continue
+
+            consecutive_errors = 0
 
             if record.validation_status != "valid":
                 console.print(

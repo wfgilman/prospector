@@ -185,7 +185,10 @@ def download_pair(
     elif last_ms is not None:
         log.info("%s/%s: already up to date", coin, interval)
     else:
-        log.warning("%s/%s: fresh download returned no data — check interval/pair availability", coin, interval)
+        log.warning(
+            "%s/%s: fresh download returned no data — check interval/pair availability",
+            coin, interval,
+        )
 
     return pd.read_parquet(path) if path.exists() else pd.DataFrame()
 

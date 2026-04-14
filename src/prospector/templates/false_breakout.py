@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from prospector.templates.base import Direction, MIN_REWARD_RISK, Signal, validate_ohlcv
+from prospector.templates.base import MIN_REWARD_RISK, Direction, Signal, validate_ohlcv
 
 
 def _range_bounds(df: pd.DataFrame, lookback: int, end_i: int) -> tuple[float, float] | None:

@@ -1,7 +1,8 @@
 """Tests for Signal validation and base types."""
 
 import pytest
-from prospector.templates.base import Direction, Signal, MIN_REWARD_RISK
+
+from prospector.templates.base import MIN_REWARD_RISK, Direction, Signal
 
 
 def test_long_signal_valid():

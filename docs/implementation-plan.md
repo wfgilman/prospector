@@ -4,20 +4,25 @@ This document defines the implementation units for Prospector, their dependencie
 
 ---
 
-## Current Status (as of 2026-04-13)
+## Current Status (as of 2026-04-14)
 
 | Unit | Description | Status | Notes |
 |---|---|---|---|
 | 1 | Data Layer | **Complete** (partial) | OHLCV + orderbook done; train/test split pending |
 | 2 | Strategy Templates | **In progress** | `triple_screen`, `false_breakout` done; 4 remaining |
-| 3 | Backtest Harness | **Complete** | |
-| 4 | Orchestrator | **Complete** (skeleton) | 2 templates active; expand as templates added |
+| 3 | Backtest Harness | **Complete** | Walk-forward validation now surfaces overfit configs (see `docs/walk-forward-findings.md`) |
+| 4 | Orchestrator | **Complete** (skeleton) | 2 templates active; thesis falsified for continuous param search — see findings doc |
 | 5 | Ledger | **Complete** | SQLite append-only log |
 | 6 | Dashboard | Not started | |
 | 7 | Paper Trading | Not started | |
 | 8 | Live Execution | Not started | |
 
-**Immediate next task:** Run `python -m prospector.orchestrator` end-to-end to verify the skeleton works against real Ollama. Then complete the 4 remaining strategy templates (`impulse_system`, `channel_fade`, `kangaroo_tail`, `ema_divergence`) to widen the search space.
+**Immediate status (2026-04-14):** Walk-forward validation of the oracle's top-10 configs (`scripts/walk_forward_top_configs.py`, `docs/walk-forward-findings.md`) shows that **every `false_breakout` config dies under walk-forward and every `triple_screen` config degrades 42–82%**. The in-sample max score of ~192 is an overfitting artifact, not a discovered edge. The current search bottleneck is the signal-generating process, not search efficiency.
+
+**Next tracks (in parallel):**
+1. Add walk-forward as a first-class harness-level gate (new `BacktestResult.status = "overfit"`).
+2. Re-rank configs by walk-forward mean score rather than single-window score.
+3. Literature review for denser-signal, LLM-suitable crypto strategies (funding-rate arb, event-driven, cross-exchange mispricing) — the practical limit is the market and hardware, not creativity. Elder-derived templates may not be the right shape for the data we have.
 
 ## Language
 

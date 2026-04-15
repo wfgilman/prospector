@@ -1,5 +1,7 @@
 # Trading Strategy Discovery System — Project Synopsis
 
+> **Status update — 2026-04-14:** The inner-loop thesis described in this document has been **falsified** by the walk-forward validation of the oracle random search (see `docs/pivot-2026-04-14.md` and `docs/walk-forward-findings.md`). The LLM did not add value over random search for continuous parameter optimization, and the Elder-derived templates do not produce enough trade density on available data to validate any config across time. The project is pivoting to research on LLM-suitable denser-signal crypto strategies. The design below is preserved for historical context and because much of the infrastructure (data, harness, ledger, walk-forward) is reusable for the next track.
+
 ## Executive Summary
 
 Build a locally-hosted system that autonomously discovers, evaluates, and refines price-action-based trading strategies for crypto perpetual futures on Hyperliquid. A quantized 13B language model runs continuously in the background, selecting from a library of human-authored strategy templates and proposing parameter configurations to backtest. A rigorous backtest harness evaluates each proposal against historical price data and returns structured metrics. A sliding window of recent results feeds back into the model's context, and a periodic LoRA adapter encodes long-term lessons to prevent the system from cycling through previously-failed approaches.

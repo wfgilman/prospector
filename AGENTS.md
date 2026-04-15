@@ -12,20 +12,32 @@ The full design is in `docs/trading-strategy-discovery-synopsis.md`. The build p
 
 ---
 
-## Current Build Status (as of 2026-04-13)
+## Current Status (as of 2026-04-14) — project is pivoting
+
+**This project is pausing the Elder-template parameter-search track and pivoting to strategy research.** See `docs/pivot-2026-04-14.md` for the full rationale. Summary:
+
+- Oracle random search (n=2000) found an in-sample max score of 192.5.
+- Walk-forward validation of the top-10 configs showed **100% of `false_breakout` configs die** (zero scored folds) and **`triple_screen` configs degrade 42–82%**. The in-sample ceiling is an overfitting artifact, not a discovered edge.
+- The LLM inner loop added no value over random search in this problem shape (continuous parameter optimization).
+- Root cause is signal density, not search efficiency — Elder templates produce 40–120 trades over the full ~5000-bar history, which cannot distribute across walk-forward folds.
+
+**Current track:** Research phase — written prospectus on LLM-suitable denser-signal crypto strategies (funding-rate arb, event-driven, cross-exchange mispricing, calendar effects). No code until the prospectus is agreed. Do not resume the Elder-template track without a new directive.
 
 | Unit | Description | Status |
 |---|---|---|
 | 1 | Data Layer: OHLCV download + orderbook poller | **Complete** (caveats below) |
-| 2 | Strategy Templates | **Partial** — `triple_screen`, `false_breakout` done; 4 remaining |
+| 2 | Strategy Templates | **Paused** — 2 built; 4 not being built |
 | 3 | Backtest Harness | **Complete** |
-| 4 | Orchestrator / Inner Loop | **Complete** (skeleton) |
+| 4 | Orchestrator / Inner Loop | **Paused** |
 | 5 | Ledger and Persistence | **Complete** |
-| 6 | Dashboard | Not started |
-| 7 | Paper Trading | Not started |
-| 8 | Live Execution | Not started |
+| 6 | Dashboard | **Deferred** |
+| 7 | Paper Trading | **Deferred** |
+| 8 | Live Execution | **Deferred** |
 
-**Immediate next task:** Run `python -m prospector.orchestrator` end-to-end against real Ollama to shake out any runtime issues. Then complete the remaining 4 strategy templates (`impulse_system`, `channel_fade`, `kangaroo_tail`, `ema_divergence`) to widen the search space.
+**Reference docs for the pivot:**
+- `docs/pivot-2026-04-14.md` — canonical pivot record; learnings, what survives, what's next
+- `docs/walk-forward-findings.md` — full walk-forward analysis
+- `scripts/walk_forward_top_configs.py` — reproduction script
 
 ---
 

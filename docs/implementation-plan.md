@@ -1,28 +1,27 @@
 # Implementation Plan
 
-This document defines the implementation units for Prospector, their dependencies, and the order of work. The design specs are complete (see sibling docs); this plan covers the build.
+This document defined the implementation units for the original Elder-template parameter-search track. **That track is paused as of 2026-04-14** — see `docs/pivot-2026-04-14.md` for the full rationale. The unit status below reflects what was built before the pivot; units 6–8 are on hold pending the research-phase prospectus.
 
 ---
 
-## Current Status (as of 2026-04-14)
+## Current Status (as of 2026-04-14 — post-pivot)
 
 | Unit | Description | Status | Notes |
 |---|---|---|---|
-| 1 | Data Layer | **Complete** (partial) | OHLCV + orderbook done; train/test split pending |
-| 2 | Strategy Templates | **In progress** | `triple_screen`, `false_breakout` done; 4 remaining |
-| 3 | Backtest Harness | **Complete** | Walk-forward validation now surfaces overfit configs (see `docs/walk-forward-findings.md`) |
-| 4 | Orchestrator | **Complete** (skeleton) | 2 templates active; thesis falsified for continuous param search — see findings doc |
+| 1 | Data Layer | **Complete** (partial) | OHLCV + orderbook done; train/test split never implemented (moot — walk-forward covers it) |
+| 2 | Strategy Templates | **Paused** | `triple_screen`, `false_breakout` done; 4 remaining **not being built** |
+| 3 | Backtest Harness | **Complete** | Walk-forward validation surfaces overfit configs (see `docs/walk-forward-findings.md`) |
+| 4 | Orchestrator | **Paused** | 2 templates active; LLM inner-loop thesis falsified for continuous param search — see pivot doc |
 | 5 | Ledger | **Complete** | SQLite append-only log |
-| 6 | Dashboard | Not started | |
-| 7 | Paper Trading | Not started | |
-| 8 | Live Execution | Not started | |
+| 6 | Dashboard | **Deferred** | Nothing worth monitoring until research phase identifies a strategy family |
+| 7 | Paper Trading | **Deferred** | Same |
+| 8 | Live Execution | **Deferred** | Same |
 
-**Immediate status (2026-04-14):** Walk-forward validation of the oracle's top-10 configs (`scripts/walk_forward_top_configs.py`, `docs/walk-forward-findings.md`) shows that **every `false_breakout` config dies under walk-forward and every `triple_screen` config degrades 42–82%**. The in-sample max score of ~192 is an overfitting artifact, not a discovered edge. The current search bottleneck is the signal-generating process, not search efficiency.
+**Pivot summary:** Oracle random search (n=2000) found an in-sample max of 192.5. Walk-forward validation (`scripts/walk_forward_top_configs.py`, `docs/walk-forward-findings.md`) revealed that **every `false_breakout` config dies under walk-forward and every `triple_screen` config degrades 42–82%**. The signal-generating process of Elder templates cannot support a durable edge at the trade density the data permits. The LLM also added no value over random search in this problem shape. See `docs/pivot-2026-04-14.md`.
 
-**Next tracks (in parallel):**
-1. Add walk-forward as a first-class harness-level gate (new `BacktestResult.status = "overfit"`).
-2. Re-rank configs by walk-forward mean score rather than single-window score.
-3. Literature review for denser-signal, LLM-suitable crypto strategies (funding-rate arb, event-driven, cross-exchange mispricing) — the practical limit is the market and hardware, not creativity. Elder-derived templates may not be the right shape for the data we have.
+**Current track:** Research phase — written prospectus on LLM-suitable denser-signal crypto strategies (funding-rate arb, event-driven, cross-exchange mispricing, calendar effects). No code until the prospectus is agreed.
+
+**One small piece still worth finishing on the existing track** (optional, cheap): fold walk-forward into the harness as a first-class gate with `BacktestResult.status = "overfit"`. Reusable for whatever strategy family comes next. Not blocking the research pivot.
 
 ## Language
 

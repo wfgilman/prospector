@@ -296,14 +296,71 @@ The strategies share the same data pipeline, execution infrastructure, and risk 
 
 ---
 
-## 12. The next action
+## 12. Empirical results (2026-04-16)
 
-If this prospectus is accepted, the immediate next action is a **1-week calibration curve construction**:
+### Data source
 
-1. Connect to kalshi-data-collector's historical database.
-2. Extract all resolved markets with their PIT prices.
-3. Construct the calibration curve (aggregate + by category).
-4. Report the curve with confidence intervals and the measured edge at each bin.
-5. Make the go/no-go call.
+TrevorJS/kalshi-trades HuggingFace dataset: 154M trades, 17.5M markets, June 2021 – January 2026. CC-BY-4.0. Internal consistency validated: 99.71% exact trade/market volume match, zero duplicate trade IDs, perfectly monotonic last-price calibration. Direct API cross-validation limited (Kalshi purges old settled markets) but known outcomes confirmed (elections, NFL, NYC mayor).
 
-This is a pure data exercise — no LLM in the loop yet, no execution, no risk. It answers the foundational question: **is the Kalshi market systematically miscalibrated?** If yes, everything else follows. If no, we move to Family #10 or #12 with no sunk cost. One week of work, binary outcome.
+### Phase 1: Calibration curve (completed)
+
+**Method:** PIT pricing at 50% of market duration via ASOF join on 140M trades. 453K resolved markets survived the ≤25% time-offset filter. 5% implied-probability bins, Wilson confidence intervals.
+
+**Aggregate result — GO (6 qualifying bins):**
+
+The market systematically overprices events. Actual resolution rates fall 3–4pp below implied prices across the 25–70% range. Fee-adjusted edges (maker pricing) are 0.1–0.5pp. However, the aggregate signal is heavily composition-driven — sports dominate.
+
+**Per-category breakdown:**
+
+| Category | n | Signal bins | Key finding |
+|---|---|---|---|
+| Sports | 205K | 16/20 | Dominated by parlay overpricing (multi-leg bets). Deviations reach 8–15pp at mid-to-high implied. Structural, driven by prospect theory. Only ~6 months of history. |
+| Crypto | 117K | 5/20 | Longshot overpricing (10–30% implied, 3–4.5pp deviation). Classic favorite-longshot bias. Most consistent with original thesis. |
+| Other | 91K | 12/20 | Broad overpricing, similar pattern to sports. Needs decomposition. |
+| Financial | 28.5K | 2/20 | Mostly well-calibrated. Edge only at 35–40% and 95–100%. |
+| Weather | 9.6K | 4/20 | Noisy but promising. Small samples at tails. |
+| Economics | 1.3K | 1/20 | Too small for conclusions. |
+| Politics | 385 | 0/20 | Insufficient sample. |
+
+**Sensitivity tests passed:**
+- Filter relaxation: signal persists at 10%, 15%, 25%, 35%, 50% offset thresholds
+- Temporal stability: bias present from 2024 H2 onward; early years (2021–2024 H1) too sparse for signal
+
+**Key revision to thesis:** The bias is NOT the classic favorite-longshot pattern predicted by literature. It's dominated by (1) sports parlay overpricing and (2) crypto longshot overpricing. Financial/weather markets are near-efficient.
+
+### Phase 2: Walk-forward backtest (completed)
+
+**Method:** Train on first 70% of markets (pre-Jan 2026), test on last 30% (~136K markets). Fractional Kelly (25%), flat sizing on initial NAV ($10K), 1% max position, 2pp minimum edge, maker pricing (zero fees).
+
+**Results:**
+
+| Metric | Value |
+|---|---|
+| Total trades | 83,578 |
+| Win rate | 66.9% |
+| Total P&L | $1,590,561 |
+| Sharpe | 7.44 |
+| Max drawdown | 0.0% (see caveats) |
+
+| Category | Trades | P&L | Win rate |
+|---|---|---|---|
+| Sports | 58,601 | $815,887 | 66.2% |
+| Other | 14,364 | $616,553 | 63.8% |
+| Financial | 995 | $131,019 | 28.2% |
+| Crypto | 9,550 | $27,319 | 79.5% |
+
+**Calibration accuracy:** Train-period curves predict test-period resolution rates within 0.3–2.0pp for most bins (15–65% implied). Degradation at tails (85–100%: 5–8pp gap).
+
+**Caveats:**
+1. Test period is ~1 month (Jan 2026) — very short for regime robustness
+2. 83K trades/month requires ~2,800/day — execution-unrealistic without full automation
+3. No concurrent-exposure or correlation modeling — same-day sports parlays are correlated
+4. 0% drawdown is an artifact of daily aggregation across many trades
+5. Capital requirement with concurrent positions far exceeds $10K initial NAV
+
+### Next steps
+
+1. **Phase 3: Paper trading** — live monitoring with the calibration curve + LLM classification. Start with crypto + weather (most defensible, ties to existing infrastructure). Add sports at lower sizing.
+2. **Correlation model** — LLM-assessed pairwise correlation before adding positions. Critical for sports parlays.
+3. **Execution infrastructure** — adapt kalshi-arb-trader's execution agent for resting maker orders.
+4. **Rolling recalibration** — monthly curve refresh with circuit breaker if realized P&L deviates >2σ from expected.

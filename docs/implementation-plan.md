@@ -4,24 +4,28 @@ This document defined the implementation units for the original Elder-template p
 
 ---
 
-## Current Status (as of 2026-04-14 — post-pivot)
+## Current Status (as of 2026-04-16)
 
-| Unit | Description | Status | Notes |
+**Active track: Prediction Market Underwriting (PM Underwriting)**
+
+Strategy applies actuarial calibration to Kalshi prediction markets. See `docs/research/deep-dive-prediction-market-underwriting.md` for the full prospectus and empirical results.
+
+| Phase | Description | Status | Result |
 |---|---|---|---|
-| 1 | Data Layer | **Complete** (partial) | OHLCV + orderbook done; train/test split never implemented (moot — walk-forward covers it) |
-| 2 | Strategy Templates | **Paused** | `triple_screen`, `false_breakout` done; 4 remaining **not being built** |
-| 3 | Backtest Harness | **Complete** | Walk-forward validation surfaces overfit configs (see `docs/walk-forward-findings.md`) |
-| 4 | Orchestrator | **Paused** | 2 templates active; LLM inner-loop thesis falsified for continuous param search — see pivot doc |
-| 5 | Ledger | **Complete** | SQLite append-only log |
-| 6 | Dashboard | **Deferred** | Nothing worth monitoring until research phase identifies a strategy family |
-| 7 | Paper Trading | **Deferred** | Same |
-| 8 | Live Execution | **Deferred** | Same |
+| 1 | Calibration curve | **Complete** | GO — 6 qualifying bins aggregate, 16 in sports. Systematic overpricing confirmed. |
+| 2 | Walk-forward backtest | **Complete** | GO — Sharpe 7.44, 66.9% win rate, 83.6K trades, calibration holds out-of-sample. |
+| 3 | Paper trading | **Next** | Live monitoring with calibration curve + LLM correlation. |
+| 4 | Live (small) | Pending | 5% of intended NAV after Phase 3 validation. |
 
-**Pivot summary:** Oracle random search (n=2000) found an in-sample max of 192.5. Walk-forward validation (`scripts/walk_forward_top_configs.py`, `docs/walk-forward-findings.md`) revealed that **every `false_breakout` config dies under walk-forward and every `triple_screen` config degrades 42–82%**. The signal-generating process of Elder templates cannot support a durable edge at the trade density the data permits. The LLM also added no value over random search in this problem shape. See `docs/pivot-2026-04-14.md`.
+**Key findings:**
+- Two distinct edges: (1) sports parlay overpricing (large, ~6 months history), (2) crypto longshot overpricing (moderate, more persistent)
+- Calibration accuracy: train-period curves predict test-period rates within 0.3–2.0pp for most bins
+- Caveats: test period ~1 month, concurrent exposure not modeled, correlation between same-day events not modeled
 
-**Current track:** Research phase — written prospectus on LLM-suitable denser-signal crypto strategies (funding-rate arb, event-driven, cross-exchange mispricing, calendar effects). No code until the prospectus is agreed.
+**Scripts:** `scripts/build_calibration_curve.py`, `scripts/walk_forward_backtest.py`
+**Data:** `data/kalshi_hf/` (TrevorJS/kalshi-trades HuggingFace dataset, 5.3 GB parquet, gitignored)
 
-**One small piece still worth finishing on the existing track** (optional, cheap): fold walk-forward into the harness as a first-class gate with `BacktestResult.status = "overfit"`. Reusable for whatever strategy family comes next. Not blocking the research pivot.
+**Elder-template track:** Paused as of 2026-04-14 — see `docs/pivot-2026-04-14.md`.
 
 ## Language
 

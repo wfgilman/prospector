@@ -14,6 +14,8 @@ dependencies = [
     "websockets>=12",
     "python-dotenv>=1.0",
     "rich>=13",
+    "cryptography>=42",
+    "duckdb>=1.0",
 ]
 
 [project.optional-dependencies]

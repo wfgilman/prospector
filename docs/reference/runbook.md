@@ -67,6 +67,55 @@ python scripts/capital_constrained_sim.py [--data-dir DATA_DIR] [--min-volume 10
 
 ---
 
+## Paper Trading (Phase 3)
+
+Live paper-trading daemon for the PM underwriting strategy. Reads a persisted calibration snapshot, scans Kalshi every 15 min, enters paper positions in a local SQLite portfolio, and resolves positions as markets settle.
+
+### Prerequisites
+
+1. Kalshi API credentials. Set in the shell or a `.env` loaded before launch:
+
+   ```bash
+   export KALSHI_API_KEY_ID="<uuid from Kalshi dashboard>"
+   export KALSHI_PRIVATE_KEY_PATH="/path/to/kalshi.pem"
+   # or inline:
+   # export KALSHI_PRIVATE_KEY_PEM="$(cat kalshi.pem)"
+   ```
+
+2. A calibration snapshot on disk. Build one from the HF dataset:
+
+   ```bash
+   python scripts/refresh_calibration_store.py [--min-volume 10]
+   ```
+
+   Writes `data/calibration/store/calibration-<timestamp>.json` and updates the `current.json` pointer.
+
+### Run the Daemon
+
+```bash
+# Single tick (sweep resolutions, scan, enter, snapshot) — useful for smoke-testing
+python scripts/paper_trade.py --once
+
+# Long-running daemon at 15-min intervals
+python scripts/paper_trade.py --interval 900
+
+# Narrow to specific categories or raise the edge threshold
+python scripts/paper_trade.py --categories sports crypto --min-edge-pp 4.0
+```
+
+**State:**
+- Portfolio DB: `data/paper/portfolio.sqlite` (positions + daily_snapshots)
+- Calibration: `data/calibration/store/current.json`
+
+**Knobs** (see `scripts/paper_trade.py --help`):
+- `--initial-nav` (default 10,000) — seeds the portfolio on first run only
+- `--max-position-frac` (0.01) — per-position risk cap vs NAV
+- `--max-event-frac` (0.05) — per-event_ticker correlation cap
+- `--max-trades-per-day` (20) — daily throughput cap
+- `--kelly-fraction` (0.25) — fractional Kelly multiplier
+
+---
+
 ## Elder-Track Scripts (Paused)
 
 These scripts relate to the paused Elder-template parameter-search track.
@@ -120,6 +169,8 @@ PROSPECTOR_MOCK=1 python -m prospector.orchestrator
 |---|---|---|
 | `data/kalshi_hf/` | Kalshi HuggingFace dataset (markets + trades parquet) | Yes |
 | `data/calibration/` | Calibration curve outputs (plots, CSVs) | Yes |
+| `data/calibration/store/` | Persisted calibration snapshots (live-trading lookups) | Yes |
+| `data/paper/` | Paper-trading portfolio SQLite | Yes |
 | `data/ohlcv/` | Hyperliquid OHLCV parquet files | Yes |
 | `data/orderbook/` | Hyperliquid L2 snapshots | Yes |
 | `data/*.db` | SQLite databases (orchestrator ledger) | Yes |

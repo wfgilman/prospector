@@ -137,7 +137,6 @@ def scan(
     *,
     categories: Iterable[str] | None = None,
     min_edge_pp: float = 3.0,
-    min_volume: int = 0,
     orderbook_depth: int = 1,
 ) -> Iterator[Candidate]:
     """Yield Candidates for every active market with sufficient edge.
@@ -148,14 +147,14 @@ def scan(
     long tail of political speculation and multi-game sub-markets that
     dominate `/markets?status=open` without carrying calibrated edge.
 
-    `min_volume` skips markets below the calibration's minimum-liquidity
-    floor, and markets with no bid on either side are skipped — no
-    executable price means no candidate.
+    Markets with no bid on either side are skipped — no executable price
+    means no candidate. We don't gate on lifetime `volume`: live markets
+    often have zero trades yet still quote actively, and `calibration.min_volume`
+    is a dataset-quality floor for historical resolved markets, not a
+    live-liquidity signal.
     """
     allowed = set(categories) if categories is not None else None
     for market in _iter_markets(client, allowed):
-        if market.volume is not None and market.volume < min_volume:
-            continue
         if market.yes_bid is None and market.no_bid is None:
             continue
         try:

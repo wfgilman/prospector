@@ -221,14 +221,6 @@ class _FakeClient:
 
 
 class TestScanFilters:
-    def test_skips_markets_below_min_volume(self):
-        cal = _sports_calibration_sell()
-        hot = _mkt(ticker="HOT", volume=50, yes_bid=0.82, no_bid=0.17)
-        dead = _mkt(ticker="DEAD", volume=2, yes_bid=0.82, no_bid=0.17)
-        client = _FakeClient([hot, dead], _ob(yes=[(0.82, 100)], no=[(0.17, 50)]))
-        list(scan(client, cal, min_edge_pp=2.0, min_volume=10))
-        assert client.orderbook_calls == ["HOT"]
-
     def test_skips_markets_with_no_bids_on_either_side(self):
         cal = _sports_calibration_sell()
         quoted = _mkt(ticker="Q", volume=100, yes_bid=0.82, no_bid=0.17)

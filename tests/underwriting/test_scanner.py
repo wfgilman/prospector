@@ -10,10 +10,17 @@ from prospector.underwriting.calibration import (
 from prospector.underwriting.scanner import (
     _executable_prices,
     evaluate_market,
+    scan,
 )
 
 
-def _mkt(event_ticker: str = "KXNFL-2026-X", ticker: str = "KXNFL-2026-X-T1") -> Market:
+def _mkt(
+    event_ticker: str = "KXNFL-2026-X",
+    ticker: str = "KXNFL-2026-X-T1",
+    volume: int = 100,
+    yes_bid: float | None = None,
+    no_bid: float | None = None,
+) -> Market:
     return Market(
         ticker=ticker,
         event_ticker=event_ticker,
@@ -24,12 +31,12 @@ def _mkt(event_ticker: str = "KXNFL-2026-X", ticker: str = "KXNFL-2026-X-T1") ->
         open_time=datetime(2026, 4, 1, tzinfo=timezone.utc),
         close_time=datetime(2026, 5, 1, tzinfo=timezone.utc),
         expiration_time=None,
-        yes_bid=None,
+        yes_bid=yes_bid,
         yes_ask=None,
-        no_bid=None,
+        no_bid=no_bid,
         no_ask=None,
         last_price=None,
-        volume=100,
+        volume=volume,
         open_interest=50,
         category="",
         raw={},
@@ -185,3 +192,44 @@ class TestCandidateProperties:
         # Buy YES at 0.09: risk=0.09, reward=0.91 → ratio ~10.1:1
         assert cand.risk_per_contract == pytest.approx(0.09)
         assert cand.reward_per_contract == pytest.approx(0.91)
+
+
+class _FakeClient:
+    """Minimal client stub for scan() — records which tickers got orderbook calls."""
+
+    def __init__(self, markets: list[Market], orderbook: Orderbook):
+        self._markets = markets
+        self._ob = orderbook
+        self.orderbook_calls: list[str] = []
+
+    def iter_markets(self, **_kwargs):
+        yield from self._markets
+
+    def fetch_orderbook(self, ticker: str, depth: int = 1) -> Orderbook:
+        self.orderbook_calls.append(ticker)
+        return self._ob
+
+
+class TestScanFilters:
+    def test_skips_markets_below_min_volume(self):
+        cal = _sports_calibration_sell()
+        hot = _mkt(ticker="HOT", volume=50, yes_bid=0.82, no_bid=0.17)
+        dead = _mkt(ticker="DEAD", volume=2, yes_bid=0.82, no_bid=0.17)
+        client = _FakeClient([hot, dead], _ob(yes=[(0.82, 100)], no=[(0.17, 50)]))
+        list(scan(client, cal, min_edge_pp=2.0, min_volume=10))
+        assert client.orderbook_calls == ["HOT"]
+
+    def test_skips_markets_with_no_bids_on_either_side(self):
+        cal = _sports_calibration_sell()
+        quoted = _mkt(ticker="Q", volume=100, yes_bid=0.82, no_bid=0.17)
+        empty = _mkt(ticker="E", volume=100, yes_bid=None, no_bid=None)
+        client = _FakeClient([quoted, empty], _ob(yes=[(0.82, 100)], no=[(0.17, 50)]))
+        list(scan(client, cal, min_edge_pp=2.0))
+        assert client.orderbook_calls == ["Q"]
+
+    def test_one_sided_quote_still_fetched(self):
+        cal = _sports_calibration_sell()
+        yes_only = _mkt(ticker="YO", volume=100, yes_bid=0.82, no_bid=None)
+        client = _FakeClient([yes_only], _ob(yes=[(0.82, 100)], no=[]))
+        list(scan(client, cal, min_edge_pp=2.0))
+        assert client.orderbook_calls == ["YO"]

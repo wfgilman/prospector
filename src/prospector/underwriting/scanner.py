@@ -137,6 +137,7 @@ def scan(
     *,
     categories: Iterable[str] | None = None,
     min_edge_pp: float = 3.0,
+    min_volume: int = 0,
     orderbook_depth: int = 1,
 ) -> Iterator[Candidate]:
     """Yield Candidates for every active market with sufficient edge.
@@ -144,9 +145,18 @@ def scan(
     `categories` filters markets by category before querying the orderbook. Set
     it to e.g. `("sports", "crypto")` during early paper trading to skip
     categories that the calibration has no edge for.
+
+    `min_volume` skips markets with less lifetime volume than the threshold —
+    aligns the live scan with the minimum-liquidity floor used when building
+    the calibration and avoids per-orderbook calls on dead sub-markets
+    (Kalshi emits thousands of these in multi-game sports events).
     """
     allowed = set(categories) if categories is not None else None
     for market in client.iter_markets(status="open"):
+        if market.volume is not None and market.volume < min_volume:
+            continue
+        if market.yes_bid is None and market.no_bid is None:
+            continue
         if allowed is not None and classify(market.event_ticker) not in allowed:
             continue
         try:

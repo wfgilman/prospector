@@ -85,6 +85,7 @@ def run_once(
         calibration,
         categories=config.categories,
         min_edge_pp=config.min_edge_pp,
+        min_volume=calibration.min_volume,
         orderbook_depth=config.orderbook_depth,
     )
     candidates = _collect(candidates_iter, config.max_candidates_per_tick)

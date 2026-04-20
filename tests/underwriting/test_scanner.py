@@ -202,8 +202,18 @@ class _FakeClient:
         self._ob = orderbook
         self.orderbook_calls: list[str] = []
 
-    def iter_markets(self, **_kwargs):
-        yield from self._markets
+    def iter_markets(self, *, event_ticker: str | None = None, **_kwargs):
+        for m in self._markets:
+            if event_ticker is not None and m.event_ticker != event_ticker:
+                continue
+            yield m
+
+    def iter_events(self, status: str = "open"):
+        seen = set()
+        for m in self._markets:
+            if m.event_ticker and m.event_ticker not in seen:
+                seen.add(m.event_ticker)
+                yield {"event_ticker": m.event_ticker}
 
     def fetch_orderbook(self, ticker: str, depth: int = 1) -> Orderbook:
         self.orderbook_calls.append(ticker)
@@ -233,3 +243,24 @@ class TestScanFilters:
         client = _FakeClient([yes_only], _ob(yes=[(0.82, 100)], no=[]))
         list(scan(client, cal, min_edge_pp=2.0))
         assert client.orderbook_calls == ["YO"]
+
+    def test_event_first_skips_disallowed_categories(self):
+        cal = _sports_calibration_sell()
+        sport = _mkt(
+            ticker="S",
+            event_ticker="KXNFL-2026-A",
+            volume=100,
+            yes_bid=0.82,
+            no_bid=0.17,
+        )
+        pol = _mkt(
+            ticker="P",
+            event_ticker="KXELONMARS-99",
+            volume=100,
+            yes_bid=0.82,
+            no_bid=0.17,
+        )
+        client = _FakeClient([sport, pol], _ob(yes=[(0.82, 100)], no=[(0.17, 50)]))
+        list(scan(client, cal, categories=("sports",), min_edge_pp=2.0))
+        # Political event should never have been expanded to an orderbook call.
+        assert client.orderbook_calls == ["S"]

@@ -15,9 +15,18 @@ class FakeClient:
         self._markets = markets
         self._orderbooks = orderbooks
 
-    def iter_markets(self, *, status: str = "open"):
+    def iter_markets(self, *, status: str = "open", event_ticker: str | None = None, **_):
         for m in self._markets:
+            if event_ticker is not None and m.event_ticker != event_ticker:
+                continue
             yield m
+
+    def iter_events(self, status: str = "open"):
+        seen = set()
+        for m in self._markets:
+            if m.event_ticker and m.event_ticker not in seen:
+                seen.add(m.event_ticker)
+                yield {"event_ticker": m.event_ticker}
 
     def fetch_orderbook(self, ticker: str, depth: int = 1) -> Orderbook:
         return self._orderbooks[ticker]

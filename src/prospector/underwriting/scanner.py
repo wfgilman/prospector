@@ -142,22 +142,21 @@ def scan(
 ) -> Iterator[Candidate]:
     """Yield Candidates for every active market with sufficient edge.
 
-    `categories` filters markets by category before querying the orderbook. Set
-    it to e.g. `("sports", "crypto")` during early paper trading to skip
-    categories that the calibration has no edge for.
+    When `categories` is set (e.g. `("sports", "crypto")`), iteration is
+    event-first: we page `/events?status=open`, classify each event by its
+    `event_ticker`, and only expand markets for kept events. This skips the
+    long tail of political speculation and multi-game sub-markets that
+    dominate `/markets?status=open` without carrying calibrated edge.
 
-    `min_volume` skips markets with less lifetime volume than the threshold —
-    aligns the live scan with the minimum-liquidity floor used when building
-    the calibration and avoids per-orderbook calls on dead sub-markets
-    (Kalshi emits thousands of these in multi-game sports events).
+    `min_volume` skips markets below the calibration's minimum-liquidity
+    floor, and markets with no bid on either side are skipped — no
+    executable price means no candidate.
     """
     allowed = set(categories) if categories is not None else None
-    for market in client.iter_markets(status="open"):
+    for market in _iter_markets(client, allowed):
         if market.volume is not None and market.volume < min_volume:
             continue
         if market.yes_bid is None and market.no_bid is None:
-            continue
-        if allowed is not None and classify(market.event_ticker) not in allowed:
             continue
         try:
             ob = client.fetch_orderbook(market.ticker, depth=orderbook_depth)
@@ -166,3 +165,25 @@ def scan(
         candidate = evaluate_market(market, ob, calibration, min_edge_pp=min_edge_pp)
         if candidate is not None:
             yield candidate
+
+
+def _iter_markets(
+    client: KalshiClient, allowed: set[str] | None
+) -> Iterator[Market]:
+    """Yield markets worth evaluating.
+
+    If `allowed` is None, paginate all open markets. Otherwise walk events
+    first, skip events whose category isn't allowed, then expand only the
+    survivors.
+    """
+    if allowed is None:
+        yield from client.iter_markets(status="open")
+        return
+    for event in client.iter_events(status="open"):
+        event_ticker = event.get("event_ticker")
+        if not event_ticker or classify(event_ticker) not in allowed:
+            continue
+        try:
+            yield from client.iter_markets(status="open", event_ticker=event_ticker)
+        except Exception:
+            continue

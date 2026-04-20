@@ -30,7 +30,7 @@ This is not a prompt-tuning problem. It's a problem-shape mismatch.
 
 ### 2. The in-sample winning configs are overfitting artifacts
 
-Walk-forward validation of the top-10 oracle configs (see `docs/walk-forward-findings.md`):
+Walk-forward validation of the top-10 oracle configs (see `docs/rd/elder-track-walk-forward.md`):
 - **100% of `false_breakout` configs die** — zero scored folds at 3 or 5 folds. Trade density (~40–50 trades over 5000 bars) falls below the 20-trade per-fold gate.
 - **`triple_screen` configs degrade 42–82%** on best-security holdout mean. At most one config (run #303) comes close to temporal consistency (4/5 scored folds).
 
@@ -80,8 +80,8 @@ LoRA fine-tuning (mentioned in the original synopsis) is also off the table unti
 
 ## Pointers
 
-- Full walk-forward analysis: `docs/walk-forward-findings.md`
-- Original design (now superseded for the inner-loop thesis): `docs/trading-strategy-discovery-synopsis.md`
-- Updated build status: `docs/implementation-plan.md`
+- Full walk-forward analysis: `docs/rd/elder-track-walk-forward.md`
+- Original design (now superseded for the inner-loop thesis): `docs/implementation/archived/elder-track-synopsis.md`
+- Updated build status: `docs/implementation/plan.md`
 - Oracle baseline: `data/prospector_oracle.db`
 - Walk-forward reproduction: `scripts/walk_forward_top_configs.py`

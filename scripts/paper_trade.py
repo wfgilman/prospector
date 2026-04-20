@@ -22,6 +22,8 @@ import logging
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from prospector.kalshi import KalshiClient
 from prospector.underwriting.calibration import CalibrationStore
 from prospector.underwriting.portfolio import PaperPortfolio, PortfolioConfig
@@ -54,6 +56,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_dotenv(REPO_ROOT / ".env")
     args = parse_args(argv)
     logging.basicConfig(
         level=logging.INFO,

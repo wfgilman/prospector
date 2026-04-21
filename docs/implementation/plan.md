@@ -14,9 +14,9 @@ For the paused Elder-template parameter-search track, see [`docs/implementation/
 1. **Sports parlay overpricing** — Multi-leg sports bets systematically overpriced (prospect theory). Large edge (~4-7pp), but only ~6 months of history.
 2. **Crypto longshot overpricing** — Classic favorite-longshot bias. Moderate edge (~3-4pp), more persistent.
 
-**Mechanism:** Build per-category calibration curves (implied probability vs actual resolution rate) from historical data. When a live market's price deviates from the calibration curve by more than the fee-adjusted threshold, take the other side. Current sizing is fractional Kelly (0.25x) + per-position/event/category % of NAV caps + count-based diversity guardrails; this framework is under active reevaluation — see [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md).
+**Mechanism:** Build per-category calibration curves (implied probability vs actual resolution rate) from historical data. When a live market's price deviates from the calibration curve by more than the fee-adjusted threshold, take the other side. Sizing is equal-σ (risk parity): `risk_budget_i = book_σ_target × NAV / (σ_i × √N_target)` where `σ_i` is looked up from a per-(category, side, 5¢ bin) σ table built from the walk-forward test set. History and decision log: [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md).
 
-**Payoff profile (important):** the edge ranker systematically picks extreme-price bins (80-95¢ implied) where the label "underwriting" is misleading. At those prices, the actual per-trade distribution is a 9:1 lottery ticket: ~29% win rate × large wins vs. ~71% loss rate × small losses. The LLN requires ~100+ independent trials for the book to converge — more than the current caps comfortably permit. This is the central tension the sizing reevaluation is trying to resolve.
+**Payoff profile (important):** the edge ranker systematically picks extreme-price bins (80-95¢ implied) where the label "underwriting" is misleading. At those prices, the actual per-trade distribution is a 9:1 lottery ticket: ~29% win rate × large wins vs. ~71% loss rate × small losses. The LLN requires ~100+ independent trials for the book to converge — equal-σ sizing with `N_target=150` is the framework that lets the book reach that count under a bounded aggregate σ.
 
 **Data source:** TrevorJS/kalshi-trades HuggingFace dataset (154M trades, 17.5M markets, June 2021 – Jan 2026). Internally validated (99.71% consistency). Stored at `data/kalshi_hf/` (5.3 GB parquet, gitignored).
 
@@ -29,8 +29,8 @@ For the paused Elder-template parameter-search track, see [`docs/implementation/
 | 1 | Calibration curve | **Complete** | GO — 6 qualifying bins aggregate, 16 in sports parlays. Systematic overpricing confirmed. |
 | 2 | Walk-forward backtest | **Complete** | GO — Sharpe 7.44, 66.9% WR, 83.6K trades. Calibration holds out-of-sample. |
 | 2b | Capital-constrained simulation | **Complete** | GO at 20 trades/day: Sharpe 9.19, 303% return/41d, 3.4% max DD. Sports dominates (86% of trades). |
-| 3 | Paper trading | **In progress** | Live via launchd since 2026-04-20. Diversity + fees + category cap wired. |
-| 3.5 | Sizing-framework reevaluation | **In progress** | Per-bet Sharpe measured empirically (0.057 all / 0.110 high-edge). See [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md). |
+| 3 | Paper trading | **In progress** | Live via launchd since 2026-04-20; relaunched 2026-04-21 on equal-σ sizing (§3.5). |
+| 3.5 | Sizing-framework reevaluation | **Complete (2026-04-21)** | Equal-σ + σ-table shipped. Kelly retired. Per-bin cap replaces category cap. Full log: [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md). |
 | 4 | Live (small) | Pending | 5% of intended NAV after Phase 3 results + sizing decision. |
 
 ---
@@ -55,7 +55,7 @@ Built PIT (point-in-time) calibration curves from 453K resolved markets.
 
 ## Phase 2 — Walk-Forward Backtest (Complete)
 
-70/30 temporal split (train: pre-2026-01-01, test: Jan 2026). Calibration curves built on train set only; portfolio simulated on test set with fractional Kelly sizing.
+70/30 temporal split (train: pre-2026-01-01, test: Jan 2026). Calibration curves built on train set only; portfolio simulated on test set with fractional Kelly sizing (since retired in Phase 3.5 — see below).
 
 **Unconstrained results (all tradeable markets):**
 | Metric | Value |
@@ -126,7 +126,7 @@ Validates that the calibrated edge exists in live markets and that orders can be
 | Min edge | 2pp | 5pp (raised from 3pp on 2026-04-21 per sizing reeval) |
 | Categories | All | Sports + crypto (best Sharpe × volume trade-off) |
 | Throughput | 20/day cap | Same |
-| Sizing | Quarter-Kelly + 1% position cap | **Under reevaluation — see §Phase 3.5** |
+| Sizing | Quarter-Kelly + 1% position cap | Equal-σ with `book_σ_target=0.02`, `N_target=150`, clipped by 1% per-position cap |
 
 ### Success Criteria
 
@@ -137,18 +137,21 @@ Validates that the calibrated edge exists in live markets and that orders can be
 
 ---
 
-## Phase 3.5 — Sizing Reevaluation (In Progress)
+## Phase 3.5 — Sizing Reevaluation (Complete, 2026-04-21)
 
-Mid-Phase-3 we surfaced a structural mismatch between the sizing framework and the strategy's realized payoff profile. Edge ranking fills the extreme-price bins, which are 9:1 lottery tickets — not the win-often-lose-small insurance profile the deep-dive assumed. Kelly-per-bet + dollar caps + count caps aren't aligned with this distribution.
+Mid-Phase-3 we surfaced a structural mismatch between the sizing framework and the strategy's realized payoff profile. Edge ranking fills the extreme-price bins, which are 9:1 lottery tickets — not the win-often-lose-small insurance profile the deep-dive assumed. Kelly-per-bet + dollar caps + count caps weren't aligned with this distribution.
 
-**Empirical measurement:** `scripts/return_distribution.py` on the walk-forward test set shows per-bet Sharpe of 0.057 (all trades) or 0.110 (high-edge slice). For book-level 90% confidence: 136 positions needed; we are running ~36.
+**Empirical measurement:** `scripts/return_distribution.py` on the walk-forward test set showed per-bet Sharpe of 0.057 (all trades) or 0.110 (high-edge slice). For book-level 90% confidence: 136 positions needed; the Phase 3 book was running ~36.
 
-**Proposed direction:** CI-based book-level sizing (target portfolio Sharpe → derive N and per-bet size) rather than Kelly-per-bet + ad-hoc caps. Details and tradeoffs in [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md).
+**Resolution — shipped 2026-04-21:**
 
-**Near-term actions (ranked):**
-1. ~~Raise `min_edge_pp` from 3 to 5~~ — **done 2026-04-21** (default in `runner.py`, `scanner.py`, `paper_trade.py`).
-2. Move to equal-σ per-position sizing.
-3. Run a parallel paper portfolio with the new sizer; compare realized Sharpe over 4-6 weeks.
+1. **Equal-σ (risk-parity) sizing.** `risk_budget_i = book_σ_target × NAV / (σ_i × √N_target)` with `book_σ_target=0.02`, `N_target=150`, clipped by per-position, per-event, and per-bin caps. Sized from an empirical σ table (`data/calibration/sigma_table.json`) keyed by (category, side, 5¢ price bin) with pooled and aggregate fallbacks. Candidates with no σ at any level are rejected.
+2. **Retired `max_category_frac`.** Replaced with `max_bin_frac=0.15` per (side, 5¢ bin). Finer grain, matches the σ-table key.
+3. **Runner ranks by `edge_pp / σ_bin`.** Bin-level Sharpe proxy — concentrates fills in the best risk-adjusted slices.
+4. **Raised `min_edge_pp` default 3 → 5.** Drops ~90% of low-Sharpe filler trades.
+5. **Kelly book archived; fresh book launched on the new sizer.** No A/B run — Kelly had no academic justification under 30× σ dispersion across bins.
+
+Full decision log and math: [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md).
 
 ---
 

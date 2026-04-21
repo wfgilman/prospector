@@ -39,7 +39,7 @@ python scripts/build_calibration_curve.py [--data-dir DATA_DIR] [--min-volume 10
 
 ### Walk-Forward Backtest
 
-70/30 temporal split. Builds calibration curves on train set, simulates portfolio on test set with fractional Kelly sizing. Flat sizing (initial NAV) isolates edge from compounding.
+70/30 temporal split. Builds calibration curves on train set, simulates portfolio on test set. (Phase 2 used fractional Kelly; the live paper trader uses equal-σ sizing — see §Paper-Trading Daemon.) Flat sizing (initial NAV) isolates edge from compounding.
 
 ```bash
 python scripts/walk_forward_backtest.py [--data-dir DATA_DIR] [--min-volume 10]
@@ -106,14 +106,27 @@ python scripts/paper_trade.py --categories sports crypto --min-edge-pp 4.0
 **State:**
 - Portfolio DB: `data/paper/portfolio.db` (positions + daily_snapshots)
 - Calibration: `data/calibration/store/current.json`
+- σ table: `data/calibration/sigma_table.json` (built by `scripts/compute_sigma_table.py`)
 - Logs (under launchd): `data/paper/logs/paper_trade-YYYYMMDD.log` (daily, UTC)
 
 **Knobs** (see `scripts/paper_trade.py --help`):
 - `--initial-nav` (default 10,000) — seeds the portfolio on first run only
-- `--max-position-frac` (0.01) — per-position risk cap vs NAV
+- `--book-sigma-target` (0.02) — target σ of the book as a fraction of NAV
+- `--n-target` (150) — expected steady-state count of concurrent positions
+- `--sigma-table` (default `data/calibration/sigma_table.json`) — σ lookup by (category, side, 5¢ bin)
+- `--max-position-frac` (0.01) — per-position risk cap vs NAV (defends against pathologically small σ)
 - `--max-event-frac` (0.05) — per-event_ticker correlation cap
+- `--max-bin-frac` (0.15) — per-(side, 5¢ bin) concentration cap (replaces the retired `--max-category-frac`)
 - `--max-trades-per-day` (20) — daily throughput cap
-- `--kelly-fraction` (0.25) — fractional Kelly multiplier
+- `--min-edge-pp` (5.0) — fee-adjusted edge floor (raised from 3.0 on 2026-04-21)
+
+**Rebuilding the σ table.** Regenerate whenever the calibration snapshot is refreshed or the walk-forward window moves:
+
+```bash
+python scripts/compute_sigma_table.py
+```
+
+Output: `data/calibration/sigma_table.json` with per-bin σ (shrunk toward the pooled category/side σ with pseudo-count 200), pooled, and aggregate entries. The paper trader loads it at startup.
 
 ### Scheduled Ticks (launchd)
 

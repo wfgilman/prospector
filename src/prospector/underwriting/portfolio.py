@@ -14,24 +14,38 @@ Fees are modeled as a round-trip Kalshi taker fee charged at entry
 `fees_paid` on each position and deduct it from realized_pnl on resolution.
 Void refunds fees, so realized_pnl stays 0.
 
+Sizing (equal-σ / risk-parity):
+  Per-trade risk is computed from the walk-forward σ of the bet's
+  (category, side, price bin) stratum. Under independent-bet risk-parity
+  (r_i × σ_i = const), aggregate book σ equals (r_i × σ_i) × √N_target.
+  Setting that to `book_sigma_target × NAV` gives
+
+      risk_budget = book_sigma_target × NAV / (σ_i × √N_target)
+
+  clipped by `max_position_frac × NAV` and `max_bin_frac × NAV`. This
+  replaces quarter-Kelly. See docs/rd/sizing-reevaluation.md for the
+  derivation, and data/calibration/sigma_table.json for the σ_i source.
+
 Constraints enforced at entry time:
   - per-position:     risk_budget <= max_position_frac * nav
   - per-event $:      sum(risk_budget for event) + new_risk <= max_event_frac * nav
-  - per-category $:   sum(risk_budget for category) + new_risk <= max_category_frac * nav
+  - per-bin $:        sum(risk_budget for (side, 5¢ bin)) + new_risk
+                          <= max_bin_frac * nav
   - per-event count:  open_positions_in_event < max_positions_per_event
   - per-subseries:    open_positions_in_subseries < max_positions_per_subseries
   - per-series:       open_positions_in_series < max_positions_per_series
   - daily cap:        trades_today < max_trades_per_day
   - available cash:   risk_budget <= cash
 
-Guiding principle: boundaries are expressed as % of NAV; counts (per-event,
-per-subseries, per-series) are derivative guardrails preventing obvious
-correlated stacking, but the dollar-level caps are what actually bound
-drawdown.
+Guiding principle: boundaries are expressed as % of NAV. The bin cap
+specifically addresses fat-tail concentration in high-kurtosis bins
+(95-100¢ sell_yes above all); counts (per-event, per-subseries,
+per-series) are derivative guardrails preventing correlated stacking.
 """
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -126,14 +140,18 @@ class RejectedEntry(Exception):
 @dataclass(frozen=True)
 class PortfolioConfig:
     initial_nav: float = 10_000.0
-    max_position_frac: float = 0.01    # per-position cap: 1% of NAV at risk
-    max_event_frac: float = 0.05       # per-event cap: 5% of NAV at risk
-    max_category_frac: float = 0.20    # per-category cap: 20% of NAV at risk
-    max_trades_per_day: int = 20
-    # Diversity counts are derivative guardrails on top of the dollar caps
-    # above. They prevent obvious correlated stacking (N markets on the same
-    # game or sub-round) regardless of sizing. Subseries = event_ticker with
-    # the trailing segment stripped; series = series_ticker (e.g. KXNFL).
+    # Equal-σ sizing knobs (see module docstring).
+    book_sigma_target: float = 0.02    # target daily book σ as fraction of NAV
+    n_target: int = 150                # target concurrent independent positions
+    # Dollar caps (primary).
+    max_position_frac: float = 0.01    # per-position safety net
+    max_event_frac: float = 0.05       # per-event correlation cap
+    max_bin_frac: float = 0.15         # per (side, 5¢ bin) cap — tail protection
+    max_trades_per_day: int = 40
+    # Diversity counts: derivative guardrails on top of the dollar caps.
+    # Prevent correlated stacking (N markets on the same game/sub-round)
+    # regardless of sizing. Subseries = event_ticker with the trailing
+    # segment stripped; series = series_ticker (e.g. KXNFL).
     max_positions_per_event: int = 1
     max_positions_per_subseries: int = 1
     max_positions_per_series: int = 3
@@ -256,12 +274,22 @@ class PaperPortfolio:
         ).fetchone()
         return float(row["r"])
 
-    def category_risk(self, category: str) -> float:
+    def bin_risk(self, side: str, bin_low: int) -> float:
+        """Sum of locked risk for open positions in a (side, 5¢ bin) cell.
+
+        `bin_low` is the lower edge of a 5¢-wide price bin in cents (0, 5,
+        10, ..., 95). The cell aggregates entries where
+        floor(entry_price*100 / 5)*5 == bin_low and the side matches.
+        """
+        if side not in ("sell_yes", "buy_yes"):
+            raise ValueError(f"side must be sell_yes or buy_yes, got {side!r}")
         row = self._conn.execute(
             """SELECT COALESCE(SUM(risk_budget), 0) AS r
                FROM positions
-               WHERE category = ? AND status = 'open'""",
-            (category,),
+               WHERE status = 'open'
+                 AND side = ?
+                 AND CAST(CAST(entry_price * 100 AS INTEGER) / 5 AS INTEGER) * 5 = ?""",
+            (side, bin_low),
         ).fetchone()
         return float(row["r"])
 
@@ -301,43 +329,32 @@ class PaperPortfolio:
         ).fetchone()
         return row is not None
 
-    def size_position(
-        self,
-        edge_pp: float,
-        entry_price: float,
-        side: str,
-        kelly_fraction: float = 0.25,
-    ) -> float:
-        """Return dollars of risk budget for a position, clamped by
-        `max_position_frac * nav`.
+    def size_position(self, sigma_i: float) -> float:
+        """Equal-σ (risk-parity) position sizer.
 
-        Kelly derivation for a sell-yes bet at price P with actual YES rate q
-        (positive edge means q < P). Letting p_win = 1 - q and net odds
-        b = P/(1-P) (per $ at risk, we win P/(1-P) on the NO outcome), the
-        classical Kelly formula f* = p_win - p_lose/b simplifies to:
+        Returns the dollar risk budget for a candidate whose (category,
+        side, price-bin) stratum has per-$-risk σ of `sigma_i`, measured on
+        the walk-forward test set. Under risk-parity allocation
+        (r_i × σ_i = const for all i), aggregate book σ is
+        (r_i × σ_i) × √N_target when bets are independent. Setting that
+        equal to `book_sigma_target × NAV` gives
 
-            f* = (P - q) / P   = prob_edge / entry_price   (sell-yes)
+            r_i = book_sigma_target × NAV / (σ_i × √N_target)
 
-        Symmetrically for buy-yes at P with q > P:
+        clipped by `max_position_frac × NAV`. The per-bin cap is applied at
+        entry time, not here — it depends on already-open positions.
 
-            f* = (q - P) / (1 - P) = prob_edge / (1 - entry_price)   (buy-yes)
-
-        The input `edge_pp` is the *fee-adjusted* probability edge (from
-        `fee_adjusted_edge`), expressed in percentage points. Earlier
-        revisions of this function divided by `P/(1-P)` instead of `P`,
-        which silently undersized high-price sell-yes bets by a factor of
-        (1-P) — negligible at P=0.5, but 1/100 at P=0.99. That's why the
-        pre-fix book sized longshots at pennies.
+        `sigma_i` is the scalar σ from the walk-forward return distribution;
+        the caller (scanner/runner) is responsible for looking it up from
+        the σ_table. A non-positive σ returns 0 (refuse to size without a
+        credible volatility estimate).
         """
-        state = self.state()
-        nav = state.nav
-        edge = edge_pp / 100.0
-        denom = entry_price if side == "sell_yes" else (1.0 - entry_price)
-        if denom <= 0:
+        if sigma_i <= 0:
             return 0.0
-        kelly = max(0.0, edge / denom)
-        frac = min(kelly * kelly_fraction, self.config.max_position_frac)
-        return frac * nav
+        cfg = self.config
+        nav = self.state().nav
+        scale = cfg.book_sigma_target * nav / (sigma_i * math.sqrt(cfg.n_target))
+        return min(scale, cfg.max_position_frac * nav)
 
     def enter(
         self,
@@ -375,10 +392,12 @@ class PaperPortfolio:
             raise RejectedEntry(
                 f"event {event_ticker} exposure would exceed cap {event_cap:.2f}"
             )
-        category_cap = self.config.max_category_frac * state.nav
-        if self.category_risk(category) + risk_budget > category_cap + 1e-9:
+        bin_low = _bin_low_of(entry_price)
+        bin_cap = self.config.max_bin_frac * state.nav
+        if self.bin_risk(side, bin_low) + risk_budget > bin_cap + 1e-9:
             raise RejectedEntry(
-                f"category {category} exposure would exceed cap {category_cap:.2f}"
+                f"bin {side} {bin_low}-{bin_low + 5} exposure would exceed cap "
+                f"{bin_cap:.2f}"
             )
         if self.open_positions_in_event(event_ticker) >= self.config.max_positions_per_event:
             raise RejectedEntry(
@@ -561,6 +580,15 @@ def _subseries_of(event_ticker: str) -> str:
     """
     parts = event_ticker.rsplit("-", 1)
     return parts[0] if len(parts) == 2 else event_ticker
+
+
+def _bin_low_of(entry_price: float) -> int:
+    """Map an entry price in (0, 1) to its 5¢ bin_low in cents.
+
+    e.g. 0.93 → 90, 0.99 → 95. Matches the binning used by the σ_table.
+    """
+    cents = int(entry_price * 100)
+    return min(95, (cents // 5) * 5)
 
 
 def _row_to_position(row: sqlite3.Row) -> PaperPosition:

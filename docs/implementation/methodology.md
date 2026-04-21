@@ -213,37 +213,38 @@ For each test-set market, we look up the calibrated edge:
 
 Markets with edge < 2pp or no matching bin are skipped (no trade).
 
-### 3.4 Position Sizing — Fractional Kelly
+### 3.4 Position Sizing — Equal-σ (Risk Parity)
 
-> **Note (2026-04-21):** This section describes the sizing rule used for the Phase 2 backtest and inherited by Phase 3 paper trading. Phase 3.5 is actively reevaluating it — per-bet Sharpe measurement indicates Kelly + dollar caps is undersizing the book relative to what the payoff distribution requires. See [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md).
+> **Changed 2026-04-21:** Phase 3 launched on fractional Kelly (`f* = edge/P` for sell-yes). Phase 3.5 replaced it with equal-σ sizing after per-bet Sharpe measurement showed Kelly + dollar caps was undersizing the book by 4–14× relative to what book-level confidence requires. Rationale and decision log: [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md).
 
-For each trade, we compute the optimal bet fraction using the Kelly criterion adapted for binary options:
-
-**For sell_yes** (we believe the market overprices the event):
-```
-p_true = implied - edge_pp / 100        # our estimate of true probability
-kelly  = (implied - p_true) / (1 - p_true)
-```
-
-**For buy_yes** (we believe the market underprices the event):
-```
-p_true = implied + edge_pp / 100
-kelly  = (p_true - implied) / (1 - implied)
-```
-
-The raw Kelly fraction is then:
-- Multiplied by `KELLY_FRACTION = 0.25` (quarter-Kelly for safety)
-- Clamped to `p_true ∈ [0.01, 0.99]` to avoid degeneracy
-
-The **risk budget** (maximum dollar amount at risk on this trade) is:
+Each trade's **risk budget** (maximum dollars at risk) is set so its contribution to book-level σ is uniform across positions:
 
 ```
-risk_budget = min(kelly × INITIAL_NAV, MAX_POSITION_FRAC × INITIAL_NAV)
+risk_budget_i = book_σ_target × NAV / (σ_i × √N_target)
 ```
 
-where `MAX_POSITION_FRAC = 0.01` (1% of NAV cap per position).
+where:
+- `book_σ_target = 0.02` — the desired daily σ of the book as a fraction of NAV
+- `N_target = 150` — the expected steady-state count of concurrent positions
+- `σ_i` — the empirical σ of per-bet returns (`pnl / risk_budget`) for this trade's (category, side, 5¢ price bin)
 
-**Why flat sizing:** We use `INITIAL_NAV` (not current NAV) for all position sizing. This isolates the edge measurement from compounding effects. If we sized based on current NAV, a lucky early streak would inflate subsequent positions, and the Sharpe/return metrics would reflect compounding math rather than edge quality. Flat sizing shows what the edge itself produces.
+Under the assumption that per-bet returns are approximately independent (a working hypothesis, given the diversity caps), the aggregate book σ with N positions each sized to contribute `risk_budget_i × σ_i` to σ is `book_σ_target × NAV × √(N / N_target)` — on target at steady state and gracefully degraded when the book is partially filled.
+
+The final `risk_budget_i` is clipped to `max_position_frac × NAV` (default 1%) to defend against pathologically small σ estimates.
+
+**Why this replaces Kelly:**
+
+- Kelly's `f* = edge / P` assumes a known two-point distribution with probability `p_true`. Real per-bet σ varies ~30× across bins (crypto sell_yes 10-15¢: σ=0.36 vs. sports sell_yes 95-100¢: σ=22.4). Kelly ignores this — it sizes from `edge` and implied `P` alone — so a high-σ tail bin gets the same budget as a low-σ compressed bin with the same edge.
+- Risk parity is the natural sizing rule when you have a σ estimate per position and you care about aggregate-level risk rather than single-bet growth.
+- The book's Sharpe-optimal position count (the 136 / 511 figures in §6.2) is the N that makes `book_σ_target × √N × Sharpe ≥ 1.28 × book_σ_target`, i.e. `N ≥ (1.28/Sharpe)²`. Equal-σ sizing is what lets "N positions" be a meaningful number to target.
+
+**The σ table.** σ estimates are pre-computed offline by `scripts/compute_sigma_table.py` from the walk-forward test set, written to `data/calibration/sigma_table.json`. Narrow bins (n < 200) are shrunk toward the pooled (category, side) σ using James-Stein-style shrinkage with pseudo-count `n0 = 200`:
+
+```
+σ²_shrunk = (n × σ²_raw + n0 × σ²_pool) / (n + n0)
+```
+
+Lookup priority: exact (category, side, 5¢ bin) → pooled (category, side) → global aggregate. A candidate with no σ at any fallback level is rejected at entry — a signal we can't size is a signal we don't trust.
 
 ### 3.5 P&L Math for Binary Options
 
@@ -284,7 +285,7 @@ This asymmetry is why the walk-forward win rate (66.9%) and the capital-constrai
 The unconstrained simulation processes test-set markets sequentially by close_time:
 
 1. For each market: look up edge, skip if below threshold
-2. Compute Kelly sizing and risk budget
+2. Compute equal-σ sizing and risk budget
 3. Compute P&L based on resolution outcome
 4. Add P&L to running NAV
 5. Record daily NAV snapshots (one per unique close_date)
@@ -456,23 +457,21 @@ The paper-trading stack mirrors Phase 2b's simulation in live form:
 
 Applied at entry time, in order. The first failing check rejects the candidate with a reason logged; remaining candidates in the tick get their turn.
 
-1. **Per-position $ cap** — `max_position_frac = 0.01` (1% of NAV). Bounds worst-case single-trade loss.
+1. **Per-position $ cap** — `max_position_frac = 0.01` (1% of NAV). Bounds worst-case single-trade loss and defends against pathologically small σ estimates.
 2. **Available cash** — `risk_budget ≤ cash`. Hard budget constraint.
 3. **Per-event $ cap** — `max_event_frac = 0.05` (5% of NAV). Prevents stacking multiple contracts on the same event.
-4. **Per-category $ cap** — `max_category_frac = 0.20` (20% of NAV). Bounds correlated-category drawdown (all sports markets share league-level shocks).
+4. **Per-bin $ cap** — `max_bin_frac = 0.15` (15% of NAV). Limits concentration into a single (side, 5¢ price bin) cell, which is the finest grain at which σ is estimated and where correlated tail-risk clusters (e.g. sports sell_yes 95-100¢ is the extreme-tail bin).
 5. **Per-event count** — `max_positions_per_event = 1`. Simple diversity guardrail.
 6. **Per-subseries count** — `max_positions_per_subseries = 1`. Subseries = event_ticker minus trailing segment, typically a game/round grouping.
 7. **Per-series count** — `max_positions_per_series = 3`. Series = series_ticker (e.g. KXNFL).
 8. **Daily trade cap** — `max_trades_per_day = 20`. Matches the capital-constrained sim's best throughput slot.
 9. **No duplicate open ticker** — at most one open position per market.
 
-Dollar caps (1-4) are primary; count caps (5-7) are derivative guardrails against correlation stacking that the dollar caps don't catch.
+Dollar caps (1-4) are primary; count caps (5-7) are derivative guardrails against correlation stacking that the dollar caps don't catch. Note: the Phase 3 `max_category_frac` cap was retired on 2026-04-21 — the per-bin cap is strictly finer-grained and makes the category cap redundant.
 
 ### 5.3 Sizing
 
-Currently quarter-Kelly (`f* = edge / P` for sell-yes, `edge / (1 - P)` for buy-yes), clamped to the per-position $ cap. This is the same rule as Phase 2 with one correction: the denominator was `P/(1-P)` in a pre-live revision of the code, which undersized high-price sell-yes bets by a factor of `(1-P)` — negligible at P=0.5 but 100× at P=0.99.
-
-See §3.4 note — sizing is under Phase 3.5 reevaluation.
+Equal-σ (risk parity) per §3.4: `risk_budget_i = book_σ_target × NAV / (σ_i × √N_target)`, clipped by the per-position cap. σ is looked up from `data/calibration/sigma_table.json` by (category, side, 5¢ bin) with fallback to pooled and aggregate levels.
 
 ### 5.4 Operational notes
 
@@ -520,7 +519,7 @@ Aggregate Sharpe (0.057) is dragged down by ~70,000 low-Sharpe filler trades in 
 
 ### 6.4 Implication
 
-The current live book (~36 positions, quarter-Kelly) is 4× to 14× undersized relative to the N needed for book-level 90% confidence. The framework is not wrong — it's sized for the wrong distribution. The full argument and proposed changes are in [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md).
+The Phase 3 live book (~36 positions, quarter-Kelly) was 4× to 14× undersized relative to the N needed for book-level 90% confidence. The framework was not wrong — it was sized for the wrong distribution. The resolution, shipped 2026-04-21, is equal-σ sizing (§3.4). The full argument and decision log is in [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md).
 
 ---
 

@@ -3,8 +3,13 @@
 Each tick:
   1. Sweep resolutions for open paper positions.
   2. Scan active markets for calibration-driven edge.
-  3. Rank candidates by edge, enter up to the remaining daily trade budget.
+  3. Size each candidate by equal-σ (risk-parity) sizing and rank by
+     per-trade Sharpe proxy (edge / σ_bin). Enter up to the remaining
+     daily trade budget.
   4. Write a daily snapshot.
+
+The σ table is a required dependency — candidates with no σ estimate at
+any fallback level are rejected rather than sized from a guess.
 
 The loop is intentionally simple and stateless between ticks; all state
 (positions, snapshots) lives in the paper portfolio SQLite database. The
@@ -25,6 +30,7 @@ from prospector.underwriting.calibration import Calibration
 from prospector.underwriting.monitor import MonitorReport, sweep
 from prospector.underwriting.portfolio import PaperPortfolio, RejectedEntry
 from prospector.underwriting.scanner import Candidate, scan
+from prospector.underwriting.sizing import MissingSigma, SigmaTable
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +39,6 @@ logger = logging.getLogger(__name__)
 class RunnerConfig:
     min_edge_pp: float = 5.0
     categories: tuple[str, ...] | None = ("sports", "crypto")
-    kelly_fraction: float = 0.25
     orderbook_depth: int = 1
     max_candidates_per_tick: int = 200
 
@@ -51,6 +56,7 @@ def run_once(
     client: KalshiClient,
     portfolio: PaperPortfolio,
     calibration: Calibration,
+    sigma_table: SigmaTable,
     config: RunnerConfig | None = None,
     *,
     now: datetime | None = None,
@@ -88,20 +94,29 @@ def run_once(
         orderbook_depth=config.orderbook_depth,
     )
     candidates = _collect(candidates_iter, config.max_candidates_per_tick)
-    candidates.sort(key=lambda c: c.edge_pp, reverse=True)
+
+    # Attach σ and rank by edge/σ (bin-level Sharpe proxy). Drop candidates
+    # with no σ estimate at any fallback level — a signal we can't size is
+    # a signal we don't trust.
+    sized: list[tuple[Candidate, float]] = []
+    for candidate in candidates:
+        try:
+            entry = sigma_table.lookup(
+                candidate.category, candidate.side, candidate.entry_price
+            )
+        except MissingSigma as exc:
+            logger.debug("skip %s: %s", candidate.market.ticker, exc)
+            continue
+        sized.append((candidate, entry.sigma))
+    sized.sort(key=lambda cs: cs[0].edge_pp / cs[1] if cs[1] > 0 else 0.0, reverse=True)
 
     entered = rejected = 0
-    for candidate in candidates:
+    for candidate, sigma_i in sized:
         if entered >= remaining_today:
             break
         if portfolio.has_open_position(candidate.market.ticker):
             continue
-        risk_budget = portfolio.size_position(
-            edge_pp=candidate.edge_pp,
-            entry_price=candidate.entry_price,
-            side=candidate.side,
-            kelly_fraction=config.kelly_fraction,
-        )
+        risk_budget = portfolio.size_position(sigma_i=sigma_i)
         if risk_budget <= 0:
             continue
         try:
@@ -119,11 +134,12 @@ def run_once(
             )
             entered += 1
             logger.info(
-                "ENTER %s %s @ %.3f edge=%.2fpp risk=$%.2f",
+                "ENTER %s %s @ %.3f edge=%.2fpp σ=%.3f risk=$%.2f",
                 candidate.market.ticker,
                 candidate.side,
                 candidate.entry_price,
                 candidate.edge_pp,
+                sigma_i,
                 risk_budget,
             )
         except RejectedEntry as exc:
@@ -144,6 +160,7 @@ def run_forever(
     client: KalshiClient,
     portfolio: PaperPortfolio,
     calibration: Calibration,
+    sigma_table: SigmaTable,
     config: RunnerConfig | None = None,
     *,
     interval_seconds: float = 900.0,
@@ -151,7 +168,7 @@ def run_forever(
     """Loop `run_once()` forever with a fixed sleep between ticks."""
     while True:
         try:
-            report = run_once(client, portfolio, calibration, config)
+            report = run_once(client, portfolio, calibration, sigma_table, config)
             logger.info(
                 "tick done: entered=%d rejected=%d candidates=%d",
                 report.entered,

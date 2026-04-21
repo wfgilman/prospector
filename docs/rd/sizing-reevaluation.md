@@ -1,8 +1,8 @@
 # Sizing-Framework Reevaluation
 
-**Status:** In progress (2026-04-21).
-**Predecessors:** Phase 2b capital-constrained sim, Phase 3 paper trading (live since 2026-04-20).
-**Related code:** `scripts/return_distribution.py`, `src/prospector/underwriting/portfolio.py`.
+**Status:** Resolved — equal-σ sizing shipped 2026-04-21. Phase 3 Kelly book archived, fresh book launched on the new sizer.
+**Predecessors:** Phase 2b capital-constrained sim, Phase 3 paper trading (Kelly, 2026-04-20 to 2026-04-21).
+**Related code:** `scripts/return_distribution.py`, `scripts/compute_sigma_table.py`, `src/prospector/underwriting/sizing.py`, `src/prospector/underwriting/portfolio.py`.
 
 ---
 
@@ -92,7 +92,7 @@ From §2.1: at high-edge Sharpe 0.110, N=136 for 90% confidence. At aggregate Sh
 
 Concrete example at $10K NAV:
 - **Current caps:** `max_position_frac=0.01` → $100/position. `max_category_frac=0.20` → $2K/category → **20 max-sized positions per category** before the cap binds. Across two categories (sports + crypto), the ceiling is ~40 positions. That's well below the 136 high-edge target.
-- **CI-framework at 90%:** N=136 effective positions. At equal risk per bet, each takes `1/136` of the book's daily risk budget. If we target 20% book vol per resolution, each bet absorbs `20%·NAV / 136 ≈ 1.5%` of NAV per $1 of σ. The *dollar* cap per position falls out of the vol target, not an arbitrary 1%.
+- **CI-framework at 90%:** N=136 effective positions. Under risk parity (`r_i ∝ 1/σ_i`), aggregate book σ = `r_i × σ_i × √N`. Inverting: `r_i = book_σ_target × NAV / (σ_i × √N)`. At `book_σ_target = 2%`, `N = 150`, `σ_i = 1` (aggregate scale), each bet takes `200 / (1 × 12.25) ≈ $16.33` of risk — and the actual dollar amount *varies by bin* because `σ_i` varies. A low-σ bin (crypto sell_yes 10-15¢, σ≈0.36) sizes ~3× larger than the default; a high-σ bin (sports sell_yes 95-100¢, σ≈22.4) sizes ~20× smaller. The *dollar* cap per position falls out of the σ target, not an arbitrary 1% applied everywhere.
 - **Count caps become derivative.** Correlation caps (per-event, per-subseries, per-series) get reinterpreted as effective-N reduction factors — e.g. "10 positions on one NFL weekend counts as ~3 independent bets" — rather than as hard upper bounds divorced from sizing.
 
 The big practical shift: **the book should be running ~3-4× more concurrent positions at ~25-35% smaller per-position size**, and the minimum-edge should be raised to keep capital concentrated in the high-Sharpe slices.
@@ -104,13 +104,13 @@ The big practical shift: **the book should be running ~3-4× more concurrent pos
 3. **Independence is fiction.** Same-event parlay legs are highly correlated; same-weekend NFL games are moderately correlated; cross-category bets are roughly independent. The correlation caps we already have are the main tool against this, but they currently aren't quantitatively derived from a correlation model.
 4. **Doesn't change that we need the calibration to hold.** If the calibration curve is wrong by 5pp at 90¢, all sizing frameworks lose money — just at different rates.
 
-## 5. Candidate next actions (ranked)
+## 5. Actions taken
 
-1. ~~**Raise min_edge_pp and tighten category filter.**~~ **Done 2026-04-21.** Setting `min_edge_pp=5` (from 3) drops ~90% of low-Sharpe noise trades while keeping the high-Sharpe slice (per §2.1). Default bumped in `runner.py`, `scanner.py`, and `paper_trade.py`. Tests pass explicit values so behavior is unchanged.
-2. **Switch per-position sizing from Kelly to equal-σ.** Each position takes `book_σ_target / (N_target · σ_bin)` of NAV. Loosens the 1% per-position cap in low-σ bins, tightens it in high-σ bins. Net effect: more positions, better-differentiated.
-3. **Raise N-ceiling caps.** With equal-σ sizing, `max_category_frac` becomes the wrong knob; the right one is an effective-N ceiling (and that's already roughly enforced by the daily throughput cap and correlation caps). Probably want to raise `max_category_frac` to 0.35-0.40 once equal-σ is in place, or retire it.
-4. **Run a parallel paper portfolio** with the new sizer against the current one, same calibration snapshot, same market feed. Compare realized Sharpe and drawdown over 4-6 weeks before changing the production book.
-5. **Longer-term: VaR-based sizing for tail-heavy bins.** The 95-100¢ sell_yes bin needs special treatment; one cluster of consecutive losses can eat 30%+ of the book. Either cap its dollar allocation at a low absolute number or drop the bin entirely.
+1. ~~**Raise min_edge_pp and tighten category filter.**~~ **Done 2026-04-21.** Setting `min_edge_pp=5` (from 3) drops ~90% of low-Sharpe noise trades while keeping the high-Sharpe slice (per §2.1).
+2. ~~**Switch per-position sizing from Kelly to equal-σ.**~~ **Done 2026-04-21.** Implemented in `src/prospector/underwriting/sizing.py` (σ-table loader) and `portfolio.size_position(sigma_i)`. Runner ranks candidates by `edge/σ_bin` (bin-level Sharpe proxy) and rejects any candidate that has no σ estimate at bin/pooled/aggregate level.
+3. ~~**Retire `max_category_frac`.**~~ **Done 2026-04-21.** Replaced with `max_bin_frac = 0.15` (per-side, per-5¢ bin). Finer granularity, matches the σ-table key, and keeps the 95-100¢ tail bin from dominating exposure even when its Sharpe is best.
+4. **A/B run:** Skipped. Kelly has no academic justification under the observed σ-dispersion, so a parallel run would only delay correction. Phase 3 Kelly book archived; fresh book launched under the new sizer.
+5. **Longer-term: VaR-based sizing for tail-heavy bins.** Still open. The 95-100¢ sell_yes bin has Sharpe 0.423 (σ_shrunk=22.4) but pathological kurtosis. Equal-σ with `max_bin_frac=0.15` bounds its total allocation, but a per-bin VaR constraint would be sharper. Revisit after 4-6 weeks of paper data.
 
 ## 6. Open questions
 
@@ -128,6 +128,12 @@ The big practical shift: **the book should be running ~3-4× more concurrent pos
 | 2026-04-21 | Built `scripts/return_distribution.py` | Need empirical per-bin μ/σ before committing to a new framework. |
 | 2026-04-21 | **This doc** | Journey record + framework proposal. No code change yet. |
 | 2026-04-21 | Raised `min_edge_pp` default 3 → 5 | Action #1 from §5. Drops low-Sharpe filler; keeps high-Sharpe slice. |
+| 2026-04-21 | **Decided: no A/B vs Kelly.** Replace Kelly outright. | Kelly has no academic justification when per-bet σ varies 30× across bins; a parallel run only delays the correction. |
+| 2026-04-21 | Shipped σ-table builder + loader | `scripts/compute_sigma_table.py`, `src/prospector/underwriting/sizing.py`. Output: `data/calibration/sigma_table.json` (49 bins, 9 pools, aggregate σ=3.54 over 80,836 test-set trades). |
+| 2026-04-21 | Replaced `size_position(edge_pp, …, kelly_fraction)` with `size_position(sigma_i)` | Portfolio formula: `book_σ_target × NAV / (σ_i × √N_target)`, clipped by `max_position_frac`. |
+| 2026-04-21 | Retired `max_category_frac`; added `max_bin_frac=0.15` | Per-(side, 5¢ bin) cap matches σ-table grain and replaces the blunter category cap. |
+| 2026-04-21 | Runner re-ranks by `edge_pp / σ_bin` | Bin-level Sharpe proxy — the best knob available at scan time. |
+| 2026-04-21 | Archived Phase 3 Kelly book; launched fresh equal-σ book | Clean start on the new methodology; no mixed-sizing confusion in the realized-return record. |
 
 ## Pointers
 

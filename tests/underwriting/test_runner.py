@@ -6,6 +6,7 @@ from prospector.kalshi.models import Market, Orderbook, OrderbookLevel
 from prospector.underwriting.calibration import Calibration, build_bins_from_rows
 from prospector.underwriting.portfolio import PaperPortfolio, PortfolioConfig
 from prospector.underwriting.runner import RunnerConfig, run_once
+from prospector.underwriting.sizing import SigmaEntry, SigmaTable
 
 
 class FakeClient:
@@ -92,6 +93,8 @@ def portfolio(tmp_path):
         initial_nav=10_000.0,
         max_trades_per_day=5,
         max_position_frac=0.01,
+        max_event_frac=1.0,
+        max_bin_frac=1.0,
         max_positions_per_event=10,
         max_positions_per_subseries=10,
         max_positions_per_series=99,
@@ -100,7 +103,20 @@ def portfolio(tmp_path):
         yield p
 
 
-def test_run_once_enters_candidates(portfolio, calibration):
+@pytest.fixture
+def sigma_table():
+    # Flat 1.0 σ at every fallback level — tests don't exercise σ shape, only
+    # that the runner routes σ through to the portfolio correctly.
+    return SigmaTable(
+        built_at="2026-04-20T00:00:00+00:00",
+        source_window="test",
+        aggregate=SigmaEntry(n=1000, mu=0.1, sigma=1.0),
+        pooled={},
+        bins={},
+    )
+
+
+def test_run_once_enters_candidates(portfolio, calibration, sigma_table):
     markets = [
         _mkt("T1", event_ticker="KXNFL-E1"),
         _mkt("T2", event_ticker="KXNFL-E2"),
@@ -111,12 +127,12 @@ def test_run_once_enters_candidates(portfolio, calibration):
     }
     client = FakeClient(markets, obs)
     now = datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc)
-    report = run_once(client, portfolio, calibration, now=now)
+    report = run_once(client, portfolio, calibration, sigma_table, now=now)
     assert report.entered == 2
     assert portfolio.state().open_positions == 2
 
 
-def test_run_once_respects_remaining_daily_cap(portfolio, calibration):
+def test_run_once_respects_remaining_daily_cap(portfolio, calibration, sigma_table):
     # Pre-fill 4 of 5 trades
     for i in range(4):
         portfolio.enter(
@@ -138,12 +154,12 @@ def test_run_once_respects_remaining_daily_cap(portfolio, calibration):
         markets.append(_mkt(f"PRE-{i}", event_ticker=f"PRE-EV-{i}", status="active"))
     client = FakeClient(markets, obs)
     now = datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc)
-    report = run_once(client, portfolio, calibration, now=now)
+    report = run_once(client, portfolio, calibration, sigma_table, now=now)
     # Only 1 slot left
     assert report.entered == 1
 
 
-def test_run_once_sorts_by_edge_desc(portfolio, calibration):
+def test_run_once_sorts_by_edge_desc(portfolio, calibration, sigma_table):
     # Two markets: one at implied 0.82 (better), one at 0.84 (smaller edge, closer to bin mid)
     markets = [
         _mkt("LOW", event_ticker="KXNFL-E1"),
@@ -158,12 +174,14 @@ def test_run_once_sorts_by_edge_desc(portfolio, calibration):
         initial_nav=10_000.0,
         max_trades_per_day=1,
         max_position_frac=0.01,
+        max_event_frac=1.0,
+        max_bin_frac=1.0,
         max_positions_per_event=10,
         max_positions_per_subseries=10,
         max_positions_per_series=99,
     )
     with PaperPortfolio(portfolio.db_path.parent / "p2.db", cfg) as port:
-        report = run_once(client, port, calibration)
+        report = run_once(client, port, calibration, sigma_table)
         assert report.entered == 1
         open_tickers = [p.ticker for p in port.open_positions()]
         # LOW's entry (0.84) is further above calibration (0.75) than HIGH's (0.82),
@@ -171,7 +189,7 @@ def test_run_once_sorts_by_edge_desc(portfolio, calibration):
         assert open_tickers == ["LOW"]
 
 
-def test_run_once_resolves_and_enters_same_tick(portfolio, calibration):
+def test_run_once_resolves_and_enters_same_tick(portfolio, calibration, sigma_table):
     # Existing open position in a market that settled; scanner finds a new entry
     portfolio.enter(
         ticker="OLD",
@@ -192,20 +210,20 @@ def test_run_once_resolves_and_enters_same_tick(portfolio, calibration):
     markets[0] = Market(**{**markets[0].__dict__, "result": "no"})
     obs = {"NEW": _ob(yes=[(0.82, 500)], no=[(0.17, 500)])}
     client = FakeClient(markets, obs)
-    report = run_once(client, portfolio, calibration)
+    report = run_once(client, portfolio, calibration, sigma_table)
     assert report.monitor.resolved == 1
     assert report.entered == 1
     # NAV bumped by the win
     assert portfolio.state().nav > 10_000.0
 
 
-def test_run_once_writes_daily_snapshot(portfolio, calibration):
+def test_run_once_writes_daily_snapshot(portfolio, calibration, sigma_table):
     client = FakeClient(
         [_mkt("T1", event_ticker="KXNFL-E1")],
         {"T1": _ob(yes=[(0.82, 500)], no=[(0.17, 500)])},
     )
     now = datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc)
-    run_once(client, portfolio, calibration, now=now)
+    run_once(client, portfolio, calibration, sigma_table, now=now)
     row = portfolio._conn.execute(
         "SELECT * FROM daily_snapshots WHERE snapshot_date = ?",
         ("2026-04-20",),
@@ -214,16 +232,16 @@ def test_run_once_writes_daily_snapshot(portfolio, calibration):
     assert row["open_positions"] == 1
 
 
-def test_run_once_filters_categories(portfolio, calibration):
+def test_run_once_filters_categories(portfolio, calibration, sigma_table):
     # Crypto event, but we only allow sports
     crypto_market = _mkt("KXETH-T1", event_ticker="KXETH-2026")
     client = FakeClient([crypto_market], {"KXETH-T1": _ob(yes=[(0.82, 500)], no=[(0.17, 500)])})
     config = RunnerConfig(categories=("sports",))
-    report = run_once(client, portfolio, calibration, config)
+    report = run_once(client, portfolio, calibration, sigma_table, config)
     assert report.entered == 0
 
 
-def test_run_once_respects_diversity_caps_by_default(tmp_path, calibration):
+def test_run_once_respects_diversity_caps_by_default(tmp_path, calibration, sigma_table):
     """Under default strict caps, two candidates on the same event yield 1 entry."""
     cfg = PortfolioConfig(initial_nav=10_000.0, max_trades_per_day=20, max_position_frac=0.01)
     # Three markets on the SAME event — diversity cap should allow only one
@@ -235,5 +253,5 @@ def test_run_once_respects_diversity_caps_by_default(tmp_path, calibration):
     obs = {m.ticker: _ob(yes=[(0.82, 500)], no=[(0.17, 500)]) for m in markets}
     client = FakeClient(markets, obs)
     with PaperPortfolio(tmp_path / "strict.db", cfg) as p:
-        report = run_once(client, p, calibration)
+        report = run_once(client, p, calibration, sigma_table)
         assert report.entered == 1

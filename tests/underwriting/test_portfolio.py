@@ -11,12 +11,13 @@ from prospector.underwriting.portfolio import (
 
 @pytest.fixture
 def portfolio(tmp_path):
-    # Existing tests pack multiple positions per event/series; diversity caps
-    # are tested separately in TestDiversity with stricter configs.
+    # Existing tests pack multiple positions per event/series/bin; those caps
+    # are tested separately (TestDiversity, TestBinCap) with stricter configs.
     config = PortfolioConfig(
         initial_nav=10_000.0,
         max_position_frac=0.01,
         max_event_frac=0.05,
+        max_bin_frac=0.95,          # relaxed — covered by TestBinCap
         max_trades_per_day=20,
         max_positions_per_event=10,
         max_positions_per_subseries=10,
@@ -206,30 +207,43 @@ class TestResolution:
 
 
 class TestSizing:
-    def test_kelly_sizing_scales_with_edge(self, portfolio):
-        small = portfolio.size_position(edge_pp=2.0, entry_price=0.80, side="sell_yes")
-        large = portfolio.size_position(edge_pp=8.0, entry_price=0.80, side="sell_yes")
-        assert large > small
+    """Equal-σ / risk-parity sizing.
 
-    def test_kelly_clamped_by_position_cap(self, portfolio):
-        huge = portfolio.size_position(edge_pp=40.0, entry_price=0.80, side="sell_yes")
-        assert huge == pytest.approx(100.0)  # 1% of 10K
+    r_i = book_sigma_target * NAV / (σ_i * sqrt(N_target)), clipped by
+    max_position_frac * NAV. At defaults (book_σ=0.02, N_target=150, NAV=$10K)
+    the unclipped scale is $200 / sqrt(150) ≈ $16.33 / σ.
+    """
 
-    def test_sizing_respects_buy_yes_odds(self, portfolio):
-        # At p=0.10 buy-yes with 5pp prob edge:
-        # Kelly f* = edge / (1 - P) = 0.05 / 0.90 = 0.0556 = 5.56% of NAV
-        # quarter-Kelly = 1.39% * 10K = $139, capped at max_position_frac=1% = $100.
-        sz = portfolio.size_position(edge_pp=5.0, entry_price=0.10, side="buy_yes")
-        assert sz == pytest.approx(100.0)
+    def test_sizing_inversely_proportional_to_sigma(self, portfolio):
+        # Halving σ doubles the risk budget (until a cap binds).
+        small_sigma = portfolio.size_position(sigma_i=2.0)
+        large_sigma = portfolio.size_position(sigma_i=4.0)
+        assert small_sigma == pytest.approx(2 * large_sigma)
 
-    def test_sizing_sell_yes_formula(self, portfolio):
-        # At P=0.80 sell-yes, 4pp edge: f* = 0.04 / 0.80 = 5% of NAV.
-        # Quarter-Kelly = 1.25% * 10K = $125, capped at max_position_frac=1% = $100.
-        capped = portfolio.size_position(edge_pp=4.0, entry_price=0.80, side="sell_yes")
-        assert capped == pytest.approx(100.0)
-        # Small edge: f* = 0.005/0.80 = 0.625%. Quarter = 0.156% * 10K = $15.625.
-        small = portfolio.size_position(edge_pp=0.5, entry_price=0.80, side="sell_yes")
-        assert small == pytest.approx(15.625)
+    def test_sizing_clamped_by_position_cap(self, portfolio):
+        # At σ=0.1, unclipped r = 16.33 / 0.1 = $163.3 → clipped to 1% = $100.
+        huge = portfolio.size_position(sigma_i=0.1)
+        assert huge == pytest.approx(100.0)
+
+    def test_sizing_below_cap_uses_formula(self, portfolio):
+        # At σ=3.0 (sports 85-90 shrunk σ ≈ 3.08), unclipped r ≈ $5.44.
+        import math
+        expected = 0.02 * 10_000.0 / (3.0 * math.sqrt(150))
+        assert portfolio.size_position(sigma_i=3.0) == pytest.approx(expected)
+
+    def test_sizing_returns_zero_for_nonpositive_sigma(self, portfolio):
+        assert portfolio.size_position(sigma_i=0.0) == 0.0
+        assert portfolio.size_position(sigma_i=-1.0) == 0.0
+
+    def test_sizing_scales_with_nav(self, tmp_path):
+        # Linear in NAV — doubling NAV doubles the budget (under the cap).
+        cfg = PortfolioConfig(initial_nav=20_000.0, max_bin_frac=0.95,
+                              max_position_frac=0.01)
+        with PaperPortfolio(tmp_path / "big.db", cfg) as p:
+            sz = p.size_position(sigma_i=3.0)
+        import math
+        expected = 0.02 * 20_000.0 / (3.0 * math.sqrt(150))
+        assert sz == pytest.approx(expected)
 
 
 class TestPersistence:
@@ -395,76 +409,102 @@ class TestFees:
             assert legacy["fees_paid"] == pytest.approx(0.14 * 0.8 * 0.2 * 100)
 
 
-class TestCategoryCap:
-    """Per-category % of NAV boundary (the primary correlated-drawdown guard)."""
+class TestBinCap:
+    """Per (side, 5¢ bin) % of NAV cap — tail-risk envelope for high-kurtosis bins."""
 
     @pytest.fixture
     def capped(self, tmp_path):
         cfg = PortfolioConfig(
             initial_nav=10_000.0,
             max_position_frac=0.01,        # $100 per position
-            max_event_frac=0.05,            # $500 per event
-            max_category_frac=0.02,         # $200 per category — tight for the test
+            max_event_frac=0.95,            # relaxed so event cap doesn't interfere
+            max_bin_frac=0.02,              # $200 per (side, bin) — tight for the test
             max_trades_per_day=20,
             max_positions_per_event=10,
             max_positions_per_subseries=10,
             max_positions_per_series=99,
         )
-        with PaperPortfolio(tmp_path / "cat.db", cfg) as p:
+        with PaperPortfolio(tmp_path / "bin.db", cfg) as p:
             yield p
 
-    def test_blocks_entry_exceeding_category_cap(self, capped):
-        # Stack two $100 sports positions → $200 (= cap). Third entry rejected.
+    def test_blocks_entry_exceeding_bin_cap(self, capped):
+        # Two $100 positions at entry_price 0.82 (bin 80-85). Third in same
+        # bin rejected.
         for i in range(2):
             _enter(
                 capped,
                 ticker=f"T{i}",
                 event_ticker=f"KXNFL-E{i}-A",
+                entry_price=0.82,
                 risk_budget=100.0,
             )
-        with pytest.raises(RejectedEntry, match="category sports"):
+        with pytest.raises(RejectedEntry, match="bin sell_yes 80-85"):
             _enter(
                 capped,
                 ticker="T2",
                 event_ticker="KXNFL-E2-A",
+                entry_price=0.82,
                 risk_budget=10.0,
             )
 
-    def test_different_categories_coexist(self, capped):
-        _enter(
-            capped,
-            ticker="S1",
-            event_ticker="KXNFL-E1-A",
-            category="sports",
-            risk_budget=100.0,
-        )
-        _enter(
-            capped,
-            ticker="C1",
-            event_ticker="KXETH-E1",
-            category="crypto",
-            risk_budget=100.0,
-        )
-        assert capped.category_risk("sports") == pytest.approx(100.0)
-        assert capped.category_risk("crypto") == pytest.approx(100.0)
-
-    def test_closed_positions_release_category_risk(self, capped):
-        _enter(
+    def test_different_bins_coexist(self, capped):
+        # 0.82 → bin 80-85; 0.87 → bin 85-90. Independent caps.
+        p1 = _enter(
             capped,
             ticker="T1",
             event_ticker="KXNFL-E1-A",
-            risk_budget=50.0,
+            entry_price=0.82,
+            risk_budget=100.0,
         )
-        capped.resolve("T1", "yes")  # closes the position (loss, but releases risk)
-        assert capped.category_risk("sports") == 0.0
-        # New entry allowed again, using the full category cap headroom
-        _enter(
+        p2 = _enter(
             capped,
             ticker="T2",
             event_ticker="KXNFL-E2-A",
+            entry_price=0.87,
+            risk_budget=100.0,
+        )
+        assert capped.bin_risk("sell_yes", 80) == pytest.approx(p1.risk_budget)
+        assert capped.bin_risk("sell_yes", 85) == pytest.approx(p2.risk_budget)
+
+    def test_different_sides_coexist(self, capped):
+        # Same 5¢ bin by price but different sides → separate cells.
+        sell = _enter(
+            capped,
+            ticker="S1",
+            event_ticker="E1",
+            entry_price=0.10,
+            side="sell_yes",
+            risk_budget=100.0,
+        )
+        buy = _enter(
+            capped,
+            ticker="B1",
+            event_ticker="E2",
+            entry_price=0.10,
+            side="buy_yes",
+            risk_budget=100.0,
+        )
+        assert capped.bin_risk("sell_yes", 10) == pytest.approx(sell.risk_budget)
+        assert capped.bin_risk("buy_yes", 10) == pytest.approx(buy.risk_budget)
+
+    def test_closed_positions_release_bin_risk(self, capped):
+        _enter(
+            capped,
+            ticker="T1",
+            event_ticker="E1",
+            entry_price=0.82,
             risk_budget=50.0,
         )
-        assert capped.category_risk("sports") == pytest.approx(50.0)
+        capped.resolve("T1", "yes")
+        assert capped.bin_risk("sell_yes", 80) == 0.0
+        p2 = _enter(
+            capped,
+            ticker="T2",
+            event_ticker="E2",
+            entry_price=0.82,
+            risk_budget=50.0,
+        )
+        assert capped.bin_risk("sell_yes", 80) == pytest.approx(p2.risk_budget)
 
 
 class TestEventRisk:

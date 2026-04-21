@@ -24,6 +24,10 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
 ]
+dashboard = [
+    "streamlit>=1.36",
+    "altair>=5.3",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

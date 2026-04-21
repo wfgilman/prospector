@@ -1,0 +1,27 @@
+# Active paper-trading strategies. The dashboard reads this file to discover
+# which strategies to render; the paper-trading daemons only look at their own
+# portfolio DB and do not consult this file.
+#
+# Paths are resolved relative to this file. Each entry declares:
+#   name         — stable identifier, used as the DB subdirectory and in logs.
+#   display_name — label shown in the dashboard.
+#   schema       — position schema. Today only "kalshi_binary" exists; add a
+#                  new schema name and a matching dashboard renderer when a
+#                  new position type (e.g. crypto_perp) ships.
+#   portfolio_db — SQLite path relative to data/paper/.
+#   log_dir      — directory the launchd wrapper writes into, relative to
+#                  data/paper/. Used by the dashboard to surface last-tick
+#                  timestamps and recent errors.
+#   launchd_label — launchd job Label, used by the dashboard to show whether
+#                   the scheduler is loaded.
+#   enabled      — hide without deleting. Disabled strategies are still
+#                  queryable for archive viewing.
+
+[[strategy]]
+name = "pm_underwriting"
+display_name = "PM Underwriting (Kalshi)"
+schema = "kalshi_binary"
+portfolio_db = "pm_underwriting/portfolio.db"
+log_dir = "pm_underwriting/logs"
+launchd_label = "com.prospector.paper-trade"
+enabled = true

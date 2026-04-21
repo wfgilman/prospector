@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+
+from prospector.dashboard import (
+    build_nav_series,
+    load_portfolio_summary,
+    load_positions,
+    load_tick_history,
+)
+from prospector.strategies.pm_underwriting.portfolio import (
+    PaperPortfolio,
+    PortfolioConfig,
+)
+
+
+@pytest.fixture
+def portfolio(tmp_path: Path) -> PaperPortfolio:
+    cfg = PortfolioConfig(
+        initial_nav=10_000.0,
+        max_position_frac=0.05,
+        max_event_frac=0.5,
+        max_bin_frac=0.5,
+        max_trades_per_day=100,
+        max_positions_per_event=5,
+        max_positions_per_subseries=5,
+        max_positions_per_series=50,
+    )
+    p = PaperPortfolio(tmp_path / "portfolio.db", cfg)
+    yield p
+    p.close()
+
+
+def test_load_portfolio_summary_empty(tmp_path: Path, portfolio: PaperPortfolio) -> None:
+    summary = load_portfolio_summary(portfolio.db_path)
+    assert summary is not None
+    assert summary.nav == 10_000.0
+    assert summary.open_positions == 0
+    assert summary.realized_pnl == 0.0
+
+
+def test_load_portfolio_summary_missing_db(tmp_path: Path) -> None:
+    assert load_portfolio_summary(tmp_path / "nope.db") is None
+
+
+def test_load_positions_and_summary_after_entry(portfolio: PaperPortfolio) -> None:
+    pos = portfolio.enter(
+        ticker="KXNFL-T1",
+        event_ticker="KXNFL-E1-A",
+        series_ticker="KXNFL",
+        category="sports",
+        side="sell_yes",
+        entry_price=0.9,
+        edge_pp=2.0,
+        risk_budget=50.0,
+        entry_time=datetime(2026, 4, 21, 12, 0, tzinfo=timezone.utc),
+    )
+    open_df = load_positions(portfolio.db_path, status="open")
+    assert len(open_df) == 1
+    assert open_df.iloc[0]["ticker"] == "KXNFL-T1"
+
+    summary = load_portfolio_summary(portfolio.db_path)
+    assert summary.open_positions == 1
+    assert summary.locked_risk == pytest.approx(pos.risk_budget)
+    assert summary.realized_pnl == 0.0
+
+
+def test_build_nav_series_tracks_realized_pnl(portfolio: PaperPortfolio) -> None:
+    portfolio.enter(
+        ticker="KXNFL-T1",
+        event_ticker="KXNFL-E1-A",
+        series_ticker="KXNFL",
+        category="sports",
+        side="sell_yes",
+        entry_price=0.9,
+        edge_pp=2.0,
+        risk_budget=50.0,
+        entry_time=datetime(2026, 4, 21, 12, 0, tzinfo=timezone.utc),
+    )
+    portfolio.resolve(
+        "KXNFL-T1",
+        market_result="no",
+        close_time=datetime(2026, 4, 21, 13, 0, tzinfo=timezone.utc),
+    )
+
+    nav_df = build_nav_series(portfolio.db_path)
+    assert len(nav_df) == 1
+    # Won a sell_yes at 0.9 → payoff above initial NAV, minus round-trip fee.
+    assert nav_df.iloc[0]["nav"] > 10_000.0
+
+
+def test_load_tick_history_parses_summary_and_timestamp(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "paper_trade-20260421.log").write_text(
+        "2026-04-21 14:10:42,972 INFO prospector.runner monitor: resolved=0 voided=0\n"
+        "2026-04-21 14:10:42,973 INFO prospector.runner daily cap reached\n"
+        "entered=0 rejected=0 candidates=0 resolved=0 voided=0\n"
+        "2026-04-21 14:25:45,356 INFO prospector.runner monitor: resolved=1 voided=0\n"
+        "entered=2 rejected=3 candidates=7 resolved=1 voided=0\n"
+    )
+    ticks = load_tick_history(log_dir)
+    assert len(ticks) == 2
+    assert ticks[-1].entered == 2
+    assert ticks[-1].rejected == 3
+    assert ticks[-1].candidates == 7
+    assert ticks[-1].resolved == 1
+    assert ticks[-1].timestamp == datetime(2026, 4, 21, 14, 25, 45, tzinfo=timezone.utc)
+
+
+def test_load_tick_history_empty_dir(tmp_path: Path) -> None:
+    assert load_tick_history(tmp_path / "nope") == []
+    (tmp_path / "empty").mkdir()
+    assert load_tick_history(tmp_path / "empty") == []

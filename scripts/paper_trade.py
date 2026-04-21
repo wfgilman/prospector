@@ -13,6 +13,9 @@ Examples:
 
     # override categories or minimum edge
     python scripts/paper_trade.py --once --categories sports --min-edge-pp 3.0
+
+Note: default `--min-edge-pp` is 5.0 (raised from 3.0 on 2026-04-21 per
+`docs/rd/sizing-reevaluation.md` — drops low-Sharpe filler trades).
 """
 
 from __future__ import annotations
@@ -44,7 +47,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--max-trades-per-day", type=int, default=20)
     p.add_argument("--max-position-frac", type=float, default=0.01)
     p.add_argument("--max-event-frac", type=float, default=0.05)
-    p.add_argument("--min-edge-pp", type=float, default=3.0)
+    p.add_argument("--min-edge-pp", type=float, default=5.0)
     p.add_argument(
         "--categories",
         nargs="*",

@@ -123,7 +123,7 @@ Validates that the calibrated edge exists in live markets and that orders can be
 |---|---|---|
 | Entry timing | PIT (50% of market duration) | When scanner finds edge (any time) |
 | Pricing | Maker (zero fees) | Paper assumes maker; fees modeled as round-trip taker to be conservative |
-| Min edge | 2pp | Running at 3pp; sizing reeval proposes raising to 5pp |
+| Min edge | 2pp | 5pp (raised from 3pp on 2026-04-21 per sizing reeval) |
 | Categories | All | Sports + crypto (best Sharpe × volume trade-off) |
 | Throughput | 20/day cap | Same |
 | Sizing | Quarter-Kelly + 1% position cap | **Under reevaluation — see §Phase 3.5** |
@@ -146,7 +146,7 @@ Mid-Phase-3 we surfaced a structural mismatch between the sizing framework and t
 **Proposed direction:** CI-based book-level sizing (target portfolio Sharpe → derive N and per-bet size) rather than Kelly-per-bet + ad-hoc caps. Details and tradeoffs in [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md).
 
 **Near-term actions (ranked):**
-1. Raise `min_edge_pp` from 3 to 5 (cheap; drops low-Sharpe filler).
+1. ~~Raise `min_edge_pp` from 3 to 5~~ — **done 2026-04-21** (default in `runner.py`, `scanner.py`, `paper_trade.py`).
 2. Move to equal-σ per-position sizing.
 3. Run a parallel paper portfolio with the new sizer; compare realized Sharpe over 4-6 weeks.
 

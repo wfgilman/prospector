@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class RunnerConfig:
-    min_edge_pp: float = 3.0
+    min_edge_pp: float = 5.0
     categories: tuple[str, ...] | None = ("sports", "crypto")
     kelly_fraction: float = 0.25
     orderbook_depth: int = 1

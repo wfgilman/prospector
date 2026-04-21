@@ -71,8 +71,9 @@ def _ob(yes: list[tuple[float, int]], no: list[tuple[float, int]]) -> Orderbook:
 
 @pytest.fixture
 def calibration():
-    # Strong sell-yes signal at implied 80-85%: actual 75% (dev -7.5pp)
-    sports = build_bins_from_rows([(80, 85, 1_000, 750)])
+    # Strong sell-yes signal at implied 80-85%: actual 72% (dev -10.5pp at mid).
+    # Sized so every test price (0.82-0.84) clears the 5pp fee-adjusted floor.
+    sports = build_bins_from_rows([(80, 85, 1_000, 720)])
     assert sports[0].side == "sell_yes"
     return Calibration(
         built_at=datetime(2026, 4, 20, tzinfo=timezone.utc),

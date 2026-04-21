@@ -136,7 +136,7 @@ def scan(
     calibration: Calibration,
     *,
     categories: Iterable[str] | None = None,
-    min_edge_pp: float = 3.0,
+    min_edge_pp: float = 5.0,
     orderbook_depth: int = 1,
 ) -> Iterator[Candidate]:
     """Yield Candidates for every active market with sufficient edge.

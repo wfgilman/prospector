@@ -106,7 +106,7 @@ The big practical shift: **the book should be running ~3-4× more concurrent pos
 
 ## 5. Candidate next actions (ranked)
 
-1. **Raise min_edge_pp and tighten category filter.** Setting `min_edge_pp=5` (from 3) drops ~90% of low-Sharpe noise trades while keeping the high-Sharpe slice (per §2.1). Cheap, reversible, and meaningful immediately. **Do this first.**
+1. ~~**Raise min_edge_pp and tighten category filter.**~~ **Done 2026-04-21.** Setting `min_edge_pp=5` (from 3) drops ~90% of low-Sharpe noise trades while keeping the high-Sharpe slice (per §2.1). Default bumped in `runner.py`, `scanner.py`, and `paper_trade.py`. Tests pass explicit values so behavior is unchanged.
 2. **Switch per-position sizing from Kelly to equal-σ.** Each position takes `book_σ_target / (N_target · σ_bin)` of NAV. Loosens the 1% per-position cap in low-σ bins, tightens it in high-σ bins. Net effect: more positions, better-differentiated.
 3. **Raise N-ceiling caps.** With equal-σ sizing, `max_category_frac` becomes the wrong knob; the right one is an effective-N ceiling (and that's already roughly enforced by the daily throughput cap and correlation caps). Probably want to raise `max_category_frac` to 0.35-0.40 once equal-σ is in place, or retire it.
 4. **Run a parallel paper portfolio** with the new sizer against the current one, same calibration snapshot, same market feed. Compare realized Sharpe and drawdown over 4-6 weeks before changing the production book.
@@ -127,6 +127,7 @@ The big practical shift: **the book should be running ~3-4× more concurrent pos
 | 2026-04-21 | Recognized payoff-profile mismatch | The edge ranker selects lottery-ticket bins, not insurance bins; current framework is sized for the wrong distribution. |
 | 2026-04-21 | Built `scripts/return_distribution.py` | Need empirical per-bin μ/σ before committing to a new framework. |
 | 2026-04-21 | **This doc** | Journey record + framework proposal. No code change yet. |
+| 2026-04-21 | Raised `min_edge_pp` default 3 → 5 | Action #1 from §5. Drops low-Sharpe filler; keeps high-Sharpe slice. |
 
 ## Pointers
 

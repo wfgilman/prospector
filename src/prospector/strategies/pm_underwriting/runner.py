@@ -26,11 +26,11 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from prospector.kalshi import KalshiClient
-from prospector.underwriting.calibration import Calibration
-from prospector.underwriting.monitor import MonitorReport, sweep
-from prospector.underwriting.portfolio import PaperPortfolio, RejectedEntry
-from prospector.underwriting.scanner import Candidate, scan
-from prospector.underwriting.sizing import MissingSigma, SigmaTable
+from prospector.strategies.pm_underwriting.calibration import Calibration
+from prospector.strategies.pm_underwriting.monitor import MonitorReport, sweep
+from prospector.strategies.pm_underwriting.portfolio import PaperPortfolio, RejectedEntry
+from prospector.strategies.pm_underwriting.scanner import Candidate, scan
+from prospector.strategies.pm_underwriting.sizing import MissingSigma, SigmaTable
 
 logger = logging.getLogger(__name__)
 

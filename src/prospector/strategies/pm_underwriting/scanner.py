@@ -18,8 +18,12 @@ from dataclasses import dataclass
 from typing import Iterable, Iterator
 
 from prospector.kalshi import KalshiClient, Market, Orderbook
-from prospector.underwriting.calibration import Calibration, CalibrationBin, fee_adjusted_edge
-from prospector.underwriting.categorize import classify
+from prospector.strategies.pm_underwriting.calibration import (
+    Calibration,
+    CalibrationBin,
+    fee_adjusted_edge,
+)
+from prospector.strategies.pm_underwriting.categorize import classify
 
 
 @dataclass(frozen=True)

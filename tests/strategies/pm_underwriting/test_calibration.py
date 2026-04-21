@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from prospector.underwriting.calibration import (
+from prospector.strategies.pm_underwriting.calibration import (
     Calibration,
     CalibrationBin,
     CalibrationStore,

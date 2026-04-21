@@ -3,11 +3,11 @@ from datetime import datetime, timezone
 import pytest
 
 from prospector.kalshi.models import Market, Orderbook, OrderbookLevel
-from prospector.underwriting.calibration import (
+from prospector.strategies.pm_underwriting.calibration import (
     Calibration,
     build_bins_from_rows,
 )
-from prospector.underwriting.scanner import (
+from prospector.strategies.pm_underwriting.scanner import (
     _executable_prices,
     evaluate_market,
     scan,

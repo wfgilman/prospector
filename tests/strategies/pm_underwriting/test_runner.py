@@ -3,10 +3,10 @@ from datetime import datetime, timezone
 import pytest
 
 from prospector.kalshi.models import Market, Orderbook, OrderbookLevel
-from prospector.underwriting.calibration import Calibration, build_bins_from_rows
-from prospector.underwriting.portfolio import PaperPortfolio, PortfolioConfig
-from prospector.underwriting.runner import RunnerConfig, run_once
-from prospector.underwriting.sizing import SigmaEntry, SigmaTable
+from prospector.strategies.pm_underwriting.calibration import Calibration, build_bins_from_rows
+from prospector.strategies.pm_underwriting.portfolio import PaperPortfolio, PortfolioConfig
+from prospector.strategies.pm_underwriting.runner import RunnerConfig, run_once
+from prospector.strategies.pm_underwriting.sizing import SigmaEntry, SigmaTable
 
 
 class FakeClient:

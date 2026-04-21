@@ -27,8 +27,8 @@
     <!-- Wrapper redirects to a dated log; launchd-captured streams should
          stay empty, but we catch bootstrap failures here anyway. -->
     <key>StandardOutPath</key>
-    <string>/Users/wgilman/workspace/prospector/data/paper/logs/launchd.log</string>
+    <string>/Users/wgilman/workspace/prospector/data/paper/pm_underwriting/logs/launchd.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/wgilman/workspace/prospector/data/paper/logs/launchd.log</string>
+    <string>/Users/wgilman/workspace/prospector/data/paper/pm_underwriting/logs/launchd.log</string>
 </dict>
 </plist>

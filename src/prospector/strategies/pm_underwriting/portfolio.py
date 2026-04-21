@@ -53,7 +53,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
-from prospector.underwriting.calibration import KALSHI_ROUND_TRIP_FEE_FACTOR
+from prospector.strategies.pm_underwriting.calibration import KALSHI_ROUND_TRIP_FEE_FACTOR
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (

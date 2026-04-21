@@ -29,14 +29,14 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from prospector.kalshi import KalshiClient
-from prospector.underwriting.calibration import CalibrationStore
-from prospector.underwriting.portfolio import PaperPortfolio, PortfolioConfig
-from prospector.underwriting.runner import RunnerConfig, run_forever, run_once
-from prospector.underwriting.sizing import load_sigma_table
+from prospector.strategies.pm_underwriting.calibration import CalibrationStore
+from prospector.strategies.pm_underwriting.portfolio import PaperPortfolio, PortfolioConfig
+from prospector.strategies.pm_underwriting.runner import RunnerConfig, run_forever, run_once
+from prospector.strategies.pm_underwriting.sizing import load_sigma_table
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CALIBRATION_DIR = REPO_ROOT / "data" / "calibration" / "store"
-DEFAULT_PORTFOLIO_DB = REPO_ROOT / "data" / "paper" / "portfolio.db"
+DEFAULT_PORTFOLIO_DB = REPO_ROOT / "data" / "paper" / "pm_underwriting" / "portfolio.db"
 DEFAULT_SIGMA_TABLE = REPO_ROOT / "data" / "calibration" / "sigma_table.json"
 
 

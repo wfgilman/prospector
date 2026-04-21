@@ -4,8 +4,8 @@ import pytest
 
 from prospector.kalshi import KalshiError
 from prospector.kalshi.models import Market
-from prospector.underwriting.monitor import sweep
-from prospector.underwriting.portfolio import PaperPortfolio, PortfolioConfig
+from prospector.strategies.pm_underwriting.monitor import sweep
+from prospector.strategies.pm_underwriting.portfolio import PaperPortfolio, PortfolioConfig
 
 
 class FakeClient:

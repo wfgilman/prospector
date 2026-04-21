@@ -15,7 +15,7 @@ import logging
 from dataclasses import dataclass
 
 from prospector.kalshi import KalshiClient, KalshiError
-from prospector.underwriting.portfolio import PaperPortfolio
+from prospector.strategies.pm_underwriting.portfolio import PaperPortfolio
 
 logger = logging.getLogger(__name__)
 

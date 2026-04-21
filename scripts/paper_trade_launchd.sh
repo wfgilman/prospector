@@ -11,7 +11,7 @@ set -u
 REPO_DIR="/Users/wgilman/workspace/prospector"
 cd "$REPO_DIR" || exit 1
 
-LOG_DIR="$REPO_DIR/data/paper/logs"
+LOG_DIR="$REPO_DIR/data/paper/pm_underwriting/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/paper_trade-$(date -u +%Y%m%d).log"
 

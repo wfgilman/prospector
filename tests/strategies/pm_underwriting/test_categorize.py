@@ -1,7 +1,7 @@
 import duckdb
 import pytest
 
-from prospector.underwriting.categorize import (
+from prospector.strategies.pm_underwriting.categorize import (
     CATEGORY_PREFIXES,
     CATEGORY_SUBSTRINGS,
     category_sql,

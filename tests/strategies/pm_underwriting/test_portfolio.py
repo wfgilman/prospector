@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from prospector.underwriting.portfolio import (
+from prospector.strategies.pm_underwriting.portfolio import (
     PaperPortfolio,
     PortfolioConfig,
     RejectedEntry,

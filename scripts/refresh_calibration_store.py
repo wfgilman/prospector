@@ -17,11 +17,11 @@ from pathlib import Path
 
 import duckdb
 
-from prospector.underwriting.calibration import (
+from prospector.strategies.pm_underwriting.calibration import (
     CalibrationStore,
     build_calibration_from_duckdb,
 )
-from prospector.underwriting.categorize import category_sql
+from prospector.strategies.pm_underwriting.categorize import category_sql
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA_DIR = REPO_ROOT / "data" / "kalshi_hf"

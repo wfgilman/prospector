@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.prospector.paper-trade</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/wgilman/workspace/prospector/scripts/paper_trade_launchd.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/wgilman/workspace/prospector</string>
+
+    <!-- Every 15 minutes. launchd queues a catch-up tick if the Mac was
+         asleep at the scheduled time. -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <!-- Don't fire at load time; first tick waits for the interval to
+         elapse so `launchctl load` doesn't double up with a manual run. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Wrapper redirects to a dated log; launchd-captured streams should
+         stay empty, but we catch bootstrap failures here anyway. -->
+    <key>StandardOutPath</key>
+    <string>/Users/wgilman/workspace/prospector/data/paper/logs/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/wgilman/workspace/prospector/data/paper/logs/launchd.log</string>
+</dict>
+</plist>

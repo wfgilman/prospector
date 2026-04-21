@@ -104,8 +104,9 @@ python scripts/paper_trade.py --categories sports crypto --min-edge-pp 4.0
 ```
 
 **State:**
-- Portfolio DB: `data/paper/portfolio.sqlite` (positions + daily_snapshots)
+- Portfolio DB: `data/paper/portfolio.db` (positions + daily_snapshots)
 - Calibration: `data/calibration/store/current.json`
+- Logs (under launchd): `data/paper/logs/paper_trade-YYYYMMDD.log` (daily, UTC)
 
 **Knobs** (see `scripts/paper_trade.py --help`):
 - `--initial-nav` (default 10,000) — seeds the portfolio on first run only
@@ -113,6 +114,31 @@ python scripts/paper_trade.py --categories sports crypto --min-edge-pp 4.0
 - `--max-event-frac` (0.05) — per-event_ticker correlation cap
 - `--max-trades-per-day` (20) — daily throughput cap
 - `--kelly-fraction` (0.25) — fractional Kelly multiplier
+
+### Scheduled Ticks (launchd)
+
+The plist in `scripts/launchd/com.prospector.paper-trade.plist` runs
+`paper_trade.py --once` every 15 min via a shell wrapper that appends to a
+UTC-dated log (so logs rotate naturally at midnight).
+
+```bash
+# Install / refresh
+cp scripts/launchd/com.prospector.paper-trade.plist ~/Library/LaunchAgents/
+launchctl unload ~/Library/LaunchAgents/com.prospector.paper-trade.plist 2>/dev/null
+launchctl load ~/Library/LaunchAgents/com.prospector.paper-trade.plist
+
+# Check status / trigger a tick manually
+launchctl list | grep paper-trade
+launchctl start com.prospector.paper-trade
+
+# Tail today's log
+tail -f data/paper/logs/paper_trade-$(date -u +%Y%m%d).log
+```
+
+`StartInterval` counts from launch-time wall clock and queues a catch-up tick
+when the Mac wakes from sleep. `RunAtLoad` is false — the first tick fires
+after the 15 min interval elapses, so `launchctl load` doesn't duplicate a
+manual run.
 
 ---
 
@@ -130,14 +156,16 @@ python scripts/walk_forward_top_configs.py
 
 ---
 
-## Hyperliquid Data Services (launchd)
-
-Two background services run under macOS launchd for Hyperliquid data collection. These are from the original Elder track and are independent of the PM underwriting work.
+## Background Services (launchd)
 
 | Service | plist | Schedule | Log |
 |---|---|---|---|
+| Paper trader | `~/Library/LaunchAgents/com.prospector.paper-trade.plist` | Every 15 min | `data/paper/logs/paper_trade-YYYYMMDD.log` |
 | Orderbook poller | `~/Library/LaunchAgents/com.prospector.orderbook.plist` | Persistent (KeepAlive) | `logs/orderbook.log` |
 | OHLCV refresh | `~/Library/LaunchAgents/com.prospector.ohlcv-refresh.plist` | Daily 2am | `logs/ohlcv-refresh.log` |
+
+The orderbook and OHLCV services are from the paused Elder track and run
+independently of the PM underwriting work.
 
 ```bash
 # Check status

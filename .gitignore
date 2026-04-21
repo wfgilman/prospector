@@ -12,6 +12,7 @@ data/ohlcv/
 data/orderbook/
 data/kalshi_hf/
 data/calibration/
+data/paper/
 data/*.db
 data/*.json
 

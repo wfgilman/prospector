@@ -292,20 +292,34 @@ class PaperPortfolio:
         side: str,
         kelly_fraction: float = 0.25,
     ) -> float:
-        """Return dollars of risk budget for a position, clamped by the
-        per-position cap. Uses fractional Kelly: f = edge / odds, where
-        edge = actual - implied (fractional) and odds = reward / risk.
+        """Return dollars of risk budget for a position, clamped by
+        `max_position_frac * nav`.
+
+        Kelly derivation for a sell-yes bet at price P with actual YES rate q
+        (positive edge means q < P). Letting p_win = 1 - q and net odds
+        b = P/(1-P) (per $ at risk, we win P/(1-P) on the NO outcome), the
+        classical Kelly formula f* = p_win - p_lose/b simplifies to:
+
+            f* = (P - q) / P   = prob_edge / entry_price   (sell-yes)
+
+        Symmetrically for buy-yes at P with q > P:
+
+            f* = (q - P) / (1 - P) = prob_edge / (1 - entry_price)   (buy-yes)
+
+        The input `edge_pp` is the *fee-adjusted* probability edge (from
+        `fee_adjusted_edge`), expressed in percentage points. Earlier
+        revisions of this function divided by `P/(1-P)` instead of `P`,
+        which silently undersized high-price sell-yes bets by a factor of
+        (1-P) — negligible at P=0.5, but 1/100 at P=0.99. That's why the
+        pre-fix book sized longshots at pennies.
         """
         state = self.state()
         nav = state.nav
         edge = edge_pp / 100.0
-        if side == "sell_yes":
-            odds = entry_price / (1.0 - entry_price)
-        else:
-            odds = (1.0 - entry_price) / entry_price
-        if odds <= 0:
+        denom = entry_price if side == "sell_yes" else (1.0 - entry_price)
+        if denom <= 0:
             return 0.0
-        kelly = max(0.0, edge / odds)
+        kelly = max(0.0, edge / denom)
         frac = min(kelly * kelly_fraction, self.config.max_position_frac)
         return frac * nav
 

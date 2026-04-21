@@ -216,10 +216,20 @@ class TestSizing:
         assert huge == pytest.approx(100.0)  # 1% of 10K
 
     def test_sizing_respects_buy_yes_odds(self, portfolio):
-        # At p=0.10 buy-yes: odds = 0.90/0.10 = 9, edge 5pp = 0.05
-        # Kelly = 0.05 / 9 = 0.00556; quarter-kelly = 0.00139 * 10K = 13.9
+        # At p=0.10 buy-yes with 5pp prob edge:
+        # Kelly f* = edge / (1 - P) = 0.05 / 0.90 = 0.0556 = 5.56% of NAV
+        # quarter-Kelly = 1.39% * 10K = $139, capped at max_position_frac=1% = $100.
         sz = portfolio.size_position(edge_pp=5.0, entry_price=0.10, side="buy_yes")
-        assert 13.0 < sz < 14.0
+        assert sz == pytest.approx(100.0)
+
+    def test_sizing_sell_yes_formula(self, portfolio):
+        # At P=0.80 sell-yes, 4pp edge: f* = 0.04 / 0.80 = 5% of NAV.
+        # Quarter-Kelly = 1.25% * 10K = $125, capped at max_position_frac=1% = $100.
+        capped = portfolio.size_position(edge_pp=4.0, entry_price=0.80, side="sell_yes")
+        assert capped == pytest.approx(100.0)
+        # Small edge: f* = 0.005/0.80 = 0.625%. Quarter = 0.156% * 10K = $15.625.
+        small = portfolio.size_position(edge_pp=0.5, entry_price=0.80, side="sell_yes")
+        assert small == pytest.approx(15.625)
 
 
 class TestPersistence:

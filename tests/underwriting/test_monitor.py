@@ -48,7 +48,15 @@ def _mkt(ticker: str, status: str, result: str = "") -> Market:
 
 @pytest.fixture
 def portfolio(tmp_path):
-    cfg = PortfolioConfig(initial_nav=10_000.0, max_trades_per_day=100)
+    # Monitor tests stage three positions on the same series/subseries; they
+    # aren't testing diversity, so the caps are loosened here.
+    cfg = PortfolioConfig(
+        initial_nav=10_000.0,
+        max_trades_per_day=100,
+        max_positions_per_event=10,
+        max_positions_per_subseries=10,
+        max_positions_per_series=99,
+    )
     with PaperPortfolio(tmp_path / "p.db", cfg) as p:
         p.enter(
             ticker="T1",
@@ -106,8 +114,9 @@ def test_resolves_settled_no(portfolio):
         "T3": _mkt("T3", "active"),
     })
     sweep(client, portfolio)
-    # sell_yes at 0.80 + no_result = win of reward_potential 80
-    assert portfolio.state().nav == pytest.approx(10_080.0)
+    # sell_yes at 0.80 + no_result = reward 80, minus round-trip fees
+    # (0.14 * 0.8 * 0.2 * 100 contracts = 2.24)
+    assert portfolio.state().nav == pytest.approx(10_000.0 + 80.0 - 2.24)
 
 
 def test_voids_market_with_voided_status(portfolio):

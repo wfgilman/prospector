@@ -9,11 +9,19 @@ A "risk_budget" is the maximum dollars we could lose on a position. For a
 sell-yes entry at price p, risk = (1 - p) * contracts; on the win path we
 collect p * contracts. For a buy-yes entry, risk = p * contracts.
 
+Fees are modeled as a round-trip Kalshi taker fee charged at entry
+(KALSHI_ROUND_TRIP_FEE_FACTOR * p * (1-p) * contracts). We store it as
+`fees_paid` on each position and deduct it from realized_pnl on resolution.
+Void refunds fees, so realized_pnl stays 0.
+
 Constraints enforced at entry time:
-  - per-position:   risk_budget <= max_position_frac * nav
-  - per-event:      sum(risk_budget for event) + new_risk <= max_event_frac * nav
-  - daily cap:      trades_today < max_trades_per_day
-  - available cash: risk_budget <= cash
+  - per-position:     risk_budget <= max_position_frac * nav
+  - per-event $:      sum(risk_budget for event) + new_risk <= max_event_frac * nav
+  - per-event count:  open_positions_in_event < max_positions_per_event
+  - per-subseries:    open_positions_in_subseries < max_positions_per_subseries
+  - per-series:       open_positions_in_series < max_positions_per_series
+  - daily cap:        trades_today < max_trades_per_day
+  - available cash:   risk_budget <= cash
 """
 
 from __future__ import annotations
@@ -24,6 +32,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Iterator
+
+from prospector.underwriting.calibration import KALSHI_ROUND_TRIP_FEE_FACTOR
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -50,7 +60,8 @@ CREATE TABLE IF NOT EXISTS positions (
     close_price REAL,
     close_time TEXT,
     realized_pnl REAL,
-    market_result TEXT
+    market_result TEXT,
+    fees_paid REAL NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
@@ -99,6 +110,7 @@ class PaperPosition:
     close_time: datetime | None
     realized_pnl: float | None
     market_result: str | None
+    fees_paid: float
 
 
 class RejectedEntry(Exception):
@@ -111,6 +123,13 @@ class PortfolioConfig:
     max_position_frac: float = 0.01    # per-position cap: 1% of NAV at risk
     max_event_frac: float = 0.05       # per-event cap: 5% of NAV at risk
     max_trades_per_day: int = 20
+    # Diversity: treating N positions on the same event/subseries/series as
+    # N independent bets overstates diversification — they share signal.
+    # Subseries = event_ticker with the trailing segment stripped (typically a
+    # game/round grouping). Series = series_ticker (e.g. KXNFL).
+    max_positions_per_event: int = 1
+    max_positions_per_subseries: int = 1
+    max_positions_per_series: int = 3
 
 
 class PaperPortfolio:
@@ -124,6 +143,7 @@ class PaperPortfolio:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
+        self._apply_migrations()
         self._ensure_initial_nav()
 
     def close(self) -> None:
@@ -134,6 +154,38 @@ class PaperPortfolio:
 
     def __exit__(self, *_exc) -> None:
         self.close()
+
+    def _apply_migrations(self) -> None:
+        """Add columns introduced after the initial schema; backfill where useful.
+
+        Using `CREATE TABLE IF NOT EXISTS` means the column list is only set for
+        brand-new databases. For existing DBs (e.g. paper portfolios already
+        running in production) we inspect `PRAGMA table_info` and add missing
+        columns by hand.
+        """
+        cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(positions)")}
+        if "fees_paid" not in cols:
+            self._conn.execute(
+                "ALTER TABLE positions ADD COLUMN fees_paid REAL NOT NULL DEFAULT 0"
+            )
+            # Backfill an estimate so open-position locked capital and future
+            # closes use realistic fees. Closed rows keep their original
+            # realized_pnl — we don't retroactively rewrite history.
+            self._conn.execute(
+                """UPDATE positions
+                   SET fees_paid = ? * entry_price * (1 - entry_price) * contracts""",
+                (KALSHI_ROUND_TRIP_FEE_FACTOR,),
+            )
+        # Older rows may have an empty/NULL series_ticker because the Kalshi
+        # /markets endpoint doesn't always return it. Derive from event_ticker
+        # so the series-level diversity cap applies to pre-migration positions.
+        self._conn.execute(
+            """UPDATE positions
+               SET series_ticker = substr(event_ticker, 1, instr(event_ticker || '-', '-') - 1)
+               WHERE (series_ticker IS NULL OR series_ticker = '')
+                 AND event_ticker IS NOT NULL
+                 AND event_ticker != ''"""
+        )
 
     def _ensure_initial_nav(self) -> None:
         row = self._conn.execute(
@@ -196,6 +248,35 @@ class PaperPortfolio:
             (event_ticker,),
         ).fetchone()
         return float(row["r"])
+
+    def open_positions_in_event(self, event_ticker: str) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM positions WHERE event_ticker = ? AND status = 'open'",
+            (event_ticker,),
+        ).fetchone()
+        return int(row["n"])
+
+    def open_positions_in_subseries(self, subseries_prefix: str) -> int:
+        """Count open positions whose event_ticker starts with the subseries prefix.
+
+        We store the full event_ticker on each row, so we match by the prefix
+        "subseries_prefix-" to ensure KXNFL-2026-W01 doesn't also match
+        KXNFL-2026-W01B.
+        """
+        row = self._conn.execute(
+            """SELECT COUNT(*) AS n FROM positions
+               WHERE status = 'open'
+                 AND (event_ticker = ? OR event_ticker LIKE ? || '-%')""",
+            (subseries_prefix, subseries_prefix),
+        ).fetchone()
+        return int(row["n"])
+
+    def open_positions_in_series(self, series_ticker: str) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM positions WHERE series_ticker = ? AND status = 'open'",
+            (series_ticker,),
+        ).fetchone()
+        return int(row["n"])
 
     def has_open_position(self, ticker: str) -> bool:
         row = self._conn.execute(
@@ -264,6 +345,24 @@ class PaperPortfolio:
             raise RejectedEntry(
                 f"event {event_ticker} exposure would exceed cap {event_cap:.2f}"
             )
+        if self.open_positions_in_event(event_ticker) >= self.config.max_positions_per_event:
+            raise RejectedEntry(
+                f"event {event_ticker} already has "
+                f"{self.config.max_positions_per_event} open position(s)"
+            )
+        subseries = _subseries_of(event_ticker)
+        if self.open_positions_in_subseries(subseries) >= self.config.max_positions_per_subseries:
+            raise RejectedEntry(
+                f"subseries {subseries} already has "
+                f"{self.config.max_positions_per_subseries} open position(s)"
+            )
+        if series_ticker and (
+            self.open_positions_in_series(series_ticker) >= self.config.max_positions_per_series
+        ):
+            raise RejectedEntry(
+                f"series {series_ticker} already has "
+                f"{self.config.max_positions_per_series} open position(s)"
+            )
         if self.trades_today() >= self.config.max_trades_per_day:
             raise RejectedEntry(
                 f"daily trade cap {self.config.max_trades_per_day} reached"
@@ -277,6 +376,7 @@ class PaperPortfolio:
         reward_potential = contracts * per_reward
         # Recompute actual risk from integer contracts for ledger accuracy.
         actual_risk = contracts * per_risk
+        fees_paid = KALSHI_ROUND_TRIP_FEE_FACTOR * entry_price * (1.0 - entry_price) * contracts
         entry_time = entry_time or datetime.now(timezone.utc)
 
         with self._txn() as conn:
@@ -284,8 +384,8 @@ class PaperPortfolio:
                 """INSERT INTO positions(
                     ticker, event_ticker, series_ticker, category, side,
                     contracts, entry_price, risk_budget, reward_potential,
-                    edge_pp, entry_time, expected_close_time
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    edge_pp, entry_time, expected_close_time, fees_paid
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     ticker,
                     event_ticker,
@@ -299,6 +399,7 @@ class PaperPortfolio:
                     edge_pp,
                     entry_time.isoformat(),
                     expected_close_time.isoformat() if expected_close_time else None,
+                    fees_paid,
                 ),
             )
             pos_id = cur.lastrowid
@@ -323,7 +424,11 @@ class PaperPortfolio:
         won = (side == "sell_yes" and market_result == "no") or (
             side == "buy_yes" and market_result == "yes"
         )
-        pnl = row["reward_potential"] if won else -row["risk_budget"]
+        gross = row["reward_potential"] if won else -row["risk_budget"]
+        # Kalshi charges taker fees on entry; resolution is free. We model
+        # the round-trip fee (paid up-front in `fees_paid`) as a realized loss
+        # booked at resolution time so NAV tracks end-to-end P&L.
+        pnl = gross - row["fees_paid"]
         close_price = 1.0 if market_result == "yes" else 0.0
         close_time = close_time or datetime.now(timezone.utc)
         with self._txn() as conn:
@@ -412,6 +517,17 @@ class PaperPortfolio:
         return _row_to_position(row)
 
 
+def _subseries_of(event_ticker: str) -> str:
+    """Return the event_ticker with its trailing segment stripped.
+
+    Kalshi event_tickers often have the form SERIES-SEASON-ROUND-SLOT; stripping
+    the final segment groups events that share the same round (e.g. all
+    sub-markets of one NFL game). Used to cap correlated bets.
+    """
+    parts = event_ticker.rsplit("-", 1)
+    return parts[0] if len(parts) == 2 else event_ticker
+
+
 def _row_to_position(row: sqlite3.Row) -> PaperPosition:
     return PaperPosition(
         id=row["id"],
@@ -438,4 +554,5 @@ def _row_to_position(row: sqlite3.Row) -> PaperPosition:
         ),
         realized_pnl=row["realized_pnl"],
         market_result=row["market_result"],
+        fees_paid=row["fees_paid"],
     )

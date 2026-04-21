@@ -279,10 +279,17 @@ def _parse_timestamp(raw) -> datetime | None:
 
 
 def _parse_market(raw: dict) -> Market:
+    event_ticker = raw.get("event_ticker", "") or ""
+    # Kalshi's /markets response often omits series_ticker; derive from the
+    # first dash-separated segment of event_ticker so downstream consumers
+    # (notably the portfolio's series-level diversity cap) always have it.
+    series_ticker = raw.get("series_ticker") or ""
+    if not series_ticker and event_ticker:
+        series_ticker = event_ticker.split("-", 1)[0]
     return Market(
         ticker=raw.get("ticker", ""),
-        event_ticker=raw.get("event_ticker", ""),
-        series_ticker=raw.get("series_ticker", ""),
+        event_ticker=event_ticker,
+        series_ticker=series_ticker,
         title=raw.get("title", "") or raw.get("subtitle", ""),
         status=raw.get("status", ""),
         result=raw.get("result", "") or "",

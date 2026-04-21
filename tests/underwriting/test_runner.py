@@ -85,8 +85,15 @@ def calibration():
 
 @pytest.fixture
 def portfolio(tmp_path):
+    # Runner tests stage multiple positions on the same series/subseries; the
+    # diversity caps get their own coverage in test_portfolio.
     cfg = PortfolioConfig(
-        initial_nav=10_000.0, max_trades_per_day=5, max_position_frac=0.01
+        initial_nav=10_000.0,
+        max_trades_per_day=5,
+        max_position_frac=0.01,
+        max_positions_per_event=10,
+        max_positions_per_subseries=10,
+        max_positions_per_series=99,
     )
     with PaperPortfolio(tmp_path / "p.db", cfg) as p:
         yield p
@@ -147,7 +154,12 @@ def test_run_once_sorts_by_edge_desc(portfolio, calibration):
     }
     client = FakeClient(markets, obs)
     cfg = PortfolioConfig(
-        initial_nav=10_000.0, max_trades_per_day=1, max_position_frac=0.01
+        initial_nav=10_000.0,
+        max_trades_per_day=1,
+        max_position_frac=0.01,
+        max_positions_per_event=10,
+        max_positions_per_subseries=10,
+        max_positions_per_series=99,
     )
     with PaperPortfolio(portfolio.db_path.parent / "p2.db", cfg) as port:
         report = run_once(client, port, calibration)
@@ -208,3 +220,19 @@ def test_run_once_filters_categories(portfolio, calibration):
     config = RunnerConfig(categories=("sports",))
     report = run_once(client, portfolio, calibration, config)
     assert report.entered == 0
+
+
+def test_run_once_respects_diversity_caps_by_default(tmp_path, calibration):
+    """Under default strict caps, two candidates on the same event yield 1 entry."""
+    cfg = PortfolioConfig(initial_nav=10_000.0, max_trades_per_day=20, max_position_frac=0.01)
+    # Three markets on the SAME event — diversity cap should allow only one
+    markets = [
+        _mkt("A", event_ticker="KXNFL-E1"),
+        _mkt("B", event_ticker="KXNFL-E1"),
+        _mkt("C", event_ticker="KXNFL-E1"),
+    ]
+    obs = {m.ticker: _ob(yes=[(0.82, 500)], no=[(0.17, 500)]) for m in markets}
+    client = FakeClient(markets, obs)
+    with PaperPortfolio(tmp_path / "strict.db", cfg) as p:
+        report = run_once(client, p, calibration)
+        assert report.entered == 1

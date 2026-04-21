@@ -11,11 +11,16 @@ from prospector.underwriting.portfolio import (
 
 @pytest.fixture
 def portfolio(tmp_path):
+    # Existing tests pack multiple positions per event/series; diversity caps
+    # are tested separately in TestDiversity with stricter configs.
     config = PortfolioConfig(
         initial_nav=10_000.0,
         max_position_frac=0.01,
         max_event_frac=0.05,
         max_trades_per_day=20,
+        max_positions_per_event=10,
+        max_positions_per_subseries=10,
+        max_positions_per_series=99,
     )
     with PaperPortfolio(tmp_path / "paper.db", config) as p:
         yield p
@@ -125,15 +130,25 @@ class TestConstraints:
             _enter(portfolio, ticker="KX-T6", risk_budget=1.0)
 
     def test_rejects_daily_cap(self, portfolio):
+        # Each event_ticker needs a distinct subseries so the diversity cap
+        # doesn't trip before the daily cap does. entry_time=None lets the
+        # portfolio stamp positions with 'today' so trades_today() sees them.
         for i in range(20):
             _enter(
                 portfolio,
                 ticker=f"KX-T{i}",
-                event_ticker=f"EV-{i}",
+                event_ticker=f"EV-{i}-A",
                 risk_budget=10.0,
+                entry_time=None,
             )
         with pytest.raises(RejectedEntry, match="daily trade cap"):
-            _enter(portfolio, ticker="KX-T20", event_ticker="EV-20", risk_budget=10.0)
+            _enter(
+                portfolio,
+                ticker="KX-T20",
+                event_ticker="EV-20-A",
+                risk_budget=10.0,
+                entry_time=None,
+            )
 
     def test_rejects_duplicate_open_ticker(self, portfolio):
         _enter(portfolio, ticker="DUP")
@@ -142,23 +157,26 @@ class TestConstraints:
 
 
 class TestResolution:
+    # Fee model: round-trip = 0.14 * p * (1-p) * contracts.
+    # At entry_price=0.80 and 100 contracts → 0.14 * 0.8 * 0.2 * 100 = 2.24
     def test_sell_yes_win_on_no_result(self, portfolio):
         _enter(portfolio)
         pos = portfolio.resolve("KXNFL-2026-T1", "no")
         assert pos.status == "closed"
-        assert pos.realized_pnl == pytest.approx(80.0)  # reward
+        assert pos.realized_pnl == pytest.approx(80.0 - 2.24)
         state = portfolio.state()
-        assert state.nav == pytest.approx(10_080.0)
+        assert state.nav == pytest.approx(10_000.0 + 80.0 - 2.24)
         assert state.locked_risk == 0.0
 
     def test_sell_yes_loss_on_yes_result(self, portfolio):
         _enter(portfolio)
         pos = portfolio.resolve("KXNFL-2026-T1", "yes")
-        assert pos.realized_pnl == pytest.approx(-20.0)
+        assert pos.realized_pnl == pytest.approx(-20.0 - 2.24)
         state = portfolio.state()
-        assert state.nav == pytest.approx(9_980.0)
+        assert state.nav == pytest.approx(10_000.0 - 20.0 - 2.24)
 
     def test_buy_yes_win_on_yes_result(self, portfolio):
+        # entry_price=0.10, 500 contracts → fees = 0.14 * 0.1 * 0.9 * 500 = 6.30
         _enter(
             portfolio,
             side="buy_yes",
@@ -166,7 +184,7 @@ class TestResolution:
             risk_budget=50.0,
         )
         pos = portfolio.resolve("KXNFL-2026-T1", "yes")
-        assert pos.realized_pnl == pytest.approx(450.0)
+        assert pos.realized_pnl == pytest.approx(450.0 - 6.30)
 
     def test_void(self, portfolio):
         _enter(portfolio)
@@ -212,7 +230,8 @@ class TestPersistence:
             _enter(p)
             p.resolve("KXNFL-2026-T1", "no")
         with PaperPortfolio(db, config) as p:
-            assert p.state().nav == pytest.approx(10_080.0)
+            # 10_000 + 80 reward - 2.24 fees
+            assert p.state().nav == pytest.approx(10_077.76)
 
     def test_initial_nav_is_sticky_across_reopen(self, tmp_path):
         db = tmp_path / "persist.db"
@@ -241,6 +260,129 @@ class TestSnapshot:
         rows = portfolio._conn.execute("SELECT * FROM daily_snapshots").fetchall()
         assert len(rows) == 1
         assert rows[0]["locked_risk"] == pytest.approx(20.0)
+
+
+class TestDiversity:
+    """Per-event / subseries / series count caps."""
+
+    @pytest.fixture
+    def strict(self, tmp_path):
+        cfg = PortfolioConfig(
+            initial_nav=10_000.0,
+            max_position_frac=0.01,
+            max_event_frac=0.05,
+            max_trades_per_day=20,
+            max_positions_per_event=1,
+            max_positions_per_subseries=1,
+            max_positions_per_series=3,
+        )
+        with PaperPortfolio(tmp_path / "strict.db", cfg) as p:
+            yield p
+
+    def test_blocks_second_entry_in_same_event(self, strict):
+        _enter(strict, ticker="T1", event_ticker="KXNFL-2026-W01-NE-NYJ")
+        with pytest.raises(RejectedEntry, match="event .* already has"):
+            _enter(
+                strict,
+                ticker="T2",
+                event_ticker="KXNFL-2026-W01-NE-NYJ",
+                risk_budget=20.0,
+            )
+
+    def test_blocks_second_entry_in_same_subseries(self, strict):
+        # Two different events but same subseries (drop last segment)
+        _enter(strict, ticker="T1", event_ticker="KXNFL-2026-W01-GAME-A")
+        with pytest.raises(RejectedEntry, match="subseries .* already has"):
+            _enter(
+                strict,
+                ticker="T2",
+                event_ticker="KXNFL-2026-W01-GAME-B",
+                risk_budget=20.0,
+            )
+
+    def test_blocks_fourth_entry_in_same_series(self, strict):
+        # Three entries on different subseries but same series — fourth blocks
+        for i in range(3):
+            _enter(
+                strict,
+                ticker=f"T{i}",
+                event_ticker=f"KXNFL-2026-W0{i+1}-GAME-X",
+                series_ticker="KXNFL",
+            )
+        with pytest.raises(RejectedEntry, match="series .* already has"):
+            _enter(
+                strict,
+                ticker="T4",
+                event_ticker="KXNFL-2026-W04-GAME-X",
+                series_ticker="KXNFL",
+            )
+
+    def test_different_series_coexist_under_series_cap(self, strict):
+        _enter(
+            strict,
+            ticker="T1",
+            event_ticker="KXNFL-2026-W01-A-B",
+            series_ticker="KXNFL",
+        )
+        _enter(
+            strict,
+            ticker="T2",
+            event_ticker="KXNBA-2026-W01-A-B",
+            series_ticker="KXNBA",
+        )
+        _enter(
+            strict,
+            ticker="T3",
+            event_ticker="KXETH-2026-UP",
+            series_ticker="KXETH",
+        )
+        assert strict.state().open_positions == 3
+
+
+class TestFees:
+    def test_fees_paid_persisted_on_entry(self, portfolio):
+        pos = _enter(portfolio)  # entry_price=0.80, 100 contracts
+        assert pos.fees_paid == pytest.approx(0.14 * 0.8 * 0.2 * 100)
+
+    def test_void_refunds_fees(self, portfolio):
+        _enter(portfolio)
+        pos = portfolio.void("KXNFL-2026-T1")
+        assert pos.realized_pnl == 0.0
+
+    def test_migration_backfills_fees_on_existing_db(self, tmp_path):
+        """A DB created before fees_paid existed should get a backfilled column."""
+        db = tmp_path / "legacy.db"
+        # Simulate a pre-migration DB by opening, dropping the column via
+        # schema surgery, inserting a row, and then reopening.
+        import sqlite3
+        conn = sqlite3.connect(db)
+        conn.executescript(
+            """
+            CREATE TABLE positions (
+                id INTEGER PRIMARY KEY,
+                ticker TEXT, event_ticker TEXT, series_ticker TEXT, category TEXT,
+                side TEXT, contracts INTEGER, entry_price REAL, risk_budget REAL,
+                reward_potential REAL, edge_pp REAL, entry_time TEXT,
+                expected_close_time TEXT, status TEXT DEFAULT 'open',
+                close_price REAL, close_time TEXT, realized_pnl REAL, market_result TEXT
+            );
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+            INSERT INTO meta(key, value) VALUES ('initial_nav', '10000.0');
+            INSERT INTO positions(
+                ticker, event_ticker, series_ticker, category, side, contracts,
+                entry_price, risk_budget, reward_potential, edge_pp, entry_time, status
+            ) VALUES (
+                'LEGACY', 'EV', 'SER', 'sports', 'sell_yes', 100, 0.80, 20.0, 80.0,
+                5.0, '2026-04-19T10:00:00+00:00', 'open'
+            );
+            """
+        )
+        conn.close()
+        with PaperPortfolio(db) as p:
+            legacy = p._conn.execute(
+                "SELECT fees_paid FROM positions WHERE ticker='LEGACY'"
+            ).fetchone()
+            assert legacy["fees_paid"] == pytest.approx(0.14 * 0.8 * 0.2 * 100)
 
 
 class TestEventRisk:

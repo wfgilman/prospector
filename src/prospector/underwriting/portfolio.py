@@ -17,11 +17,17 @@ Void refunds fees, so realized_pnl stays 0.
 Constraints enforced at entry time:
   - per-position:     risk_budget <= max_position_frac * nav
   - per-event $:      sum(risk_budget for event) + new_risk <= max_event_frac * nav
+  - per-category $:   sum(risk_budget for category) + new_risk <= max_category_frac * nav
   - per-event count:  open_positions_in_event < max_positions_per_event
   - per-subseries:    open_positions_in_subseries < max_positions_per_subseries
   - per-series:       open_positions_in_series < max_positions_per_series
   - daily cap:        trades_today < max_trades_per_day
   - available cash:   risk_budget <= cash
+
+Guiding principle: boundaries are expressed as % of NAV; counts (per-event,
+per-subseries, per-series) are derivative guardrails preventing obvious
+correlated stacking, but the dollar-level caps are what actually bound
+drawdown.
 """
 
 from __future__ import annotations
@@ -122,11 +128,12 @@ class PortfolioConfig:
     initial_nav: float = 10_000.0
     max_position_frac: float = 0.01    # per-position cap: 1% of NAV at risk
     max_event_frac: float = 0.05       # per-event cap: 5% of NAV at risk
+    max_category_frac: float = 0.20    # per-category cap: 20% of NAV at risk
     max_trades_per_day: int = 20
-    # Diversity: treating N positions on the same event/subseries/series as
-    # N independent bets overstates diversification — they share signal.
-    # Subseries = event_ticker with the trailing segment stripped (typically a
-    # game/round grouping). Series = series_ticker (e.g. KXNFL).
+    # Diversity counts are derivative guardrails on top of the dollar caps
+    # above. They prevent obvious correlated stacking (N markets on the same
+    # game or sub-round) regardless of sizing. Subseries = event_ticker with
+    # the trailing segment stripped; series = series_ticker (e.g. KXNFL).
     max_positions_per_event: int = 1
     max_positions_per_subseries: int = 1
     max_positions_per_series: int = 3
@@ -249,6 +256,15 @@ class PaperPortfolio:
         ).fetchone()
         return float(row["r"])
 
+    def category_risk(self, category: str) -> float:
+        row = self._conn.execute(
+            """SELECT COALESCE(SUM(risk_budget), 0) AS r
+               FROM positions
+               WHERE category = ? AND status = 'open'""",
+            (category,),
+        ).fetchone()
+        return float(row["r"])
+
     def open_positions_in_event(self, event_ticker: str) -> int:
         row = self._conn.execute(
             "SELECT COUNT(*) AS n FROM positions WHERE event_ticker = ? AND status = 'open'",
@@ -358,6 +374,11 @@ class PaperPortfolio:
         if self.event_risk(event_ticker) + risk_budget > event_cap + 1e-9:
             raise RejectedEntry(
                 f"event {event_ticker} exposure would exceed cap {event_cap:.2f}"
+            )
+        category_cap = self.config.max_category_frac * state.nav
+        if self.category_risk(category) + risk_budget > category_cap + 1e-9:
+            raise RejectedEntry(
+                f"category {category} exposure would exceed cap {category_cap:.2f}"
             )
         if self.open_positions_in_event(event_ticker) >= self.config.max_positions_per_event:
             raise RejectedEntry(

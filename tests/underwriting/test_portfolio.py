@@ -395,6 +395,78 @@ class TestFees:
             assert legacy["fees_paid"] == pytest.approx(0.14 * 0.8 * 0.2 * 100)
 
 
+class TestCategoryCap:
+    """Per-category % of NAV boundary (the primary correlated-drawdown guard)."""
+
+    @pytest.fixture
+    def capped(self, tmp_path):
+        cfg = PortfolioConfig(
+            initial_nav=10_000.0,
+            max_position_frac=0.01,        # $100 per position
+            max_event_frac=0.05,            # $500 per event
+            max_category_frac=0.02,         # $200 per category — tight for the test
+            max_trades_per_day=20,
+            max_positions_per_event=10,
+            max_positions_per_subseries=10,
+            max_positions_per_series=99,
+        )
+        with PaperPortfolio(tmp_path / "cat.db", cfg) as p:
+            yield p
+
+    def test_blocks_entry_exceeding_category_cap(self, capped):
+        # Stack two $100 sports positions → $200 (= cap). Third entry rejected.
+        for i in range(2):
+            _enter(
+                capped,
+                ticker=f"T{i}",
+                event_ticker=f"KXNFL-E{i}-A",
+                risk_budget=100.0,
+            )
+        with pytest.raises(RejectedEntry, match="category sports"):
+            _enter(
+                capped,
+                ticker="T2",
+                event_ticker="KXNFL-E2-A",
+                risk_budget=10.0,
+            )
+
+    def test_different_categories_coexist(self, capped):
+        _enter(
+            capped,
+            ticker="S1",
+            event_ticker="KXNFL-E1-A",
+            category="sports",
+            risk_budget=100.0,
+        )
+        _enter(
+            capped,
+            ticker="C1",
+            event_ticker="KXETH-E1",
+            category="crypto",
+            risk_budget=100.0,
+        )
+        assert capped.category_risk("sports") == pytest.approx(100.0)
+        assert capped.category_risk("crypto") == pytest.approx(100.0)
+
+    def test_closed_positions_release_category_risk(self, capped):
+        _enter(
+            capped,
+            ticker="T1",
+            event_ticker="KXNFL-E1-A",
+            risk_budget=50.0,
+        )
+        capped.resolve("T1", "yes")  # closes the position (loss, but releases risk)
+        assert capped.category_risk("sports") == 0.0
+        # New entry allowed again, using the full category cap headroom
+        _enter(
+            capped,
+            ticker="T2",
+            event_ticker="KXNFL-E2-A",
+            risk_budget=50.0,
+        )
+        assert capped.category_risk("sports") == pytest.approx(50.0)
+
+
 class TestEventRisk:
     def test_aggregates_open_positions_per_event(self, portfolio):
         _enter(portfolio, ticker="T1", risk_budget=40.0)

@@ -2,7 +2,7 @@
 
 **Status:** Resolved — equal-σ sizing shipped 2026-04-21. Phase 3 Kelly book archived, fresh book launched on the new sizer.
 **Predecessors:** Phase 2b capital-constrained sim, Phase 3 paper trading (Kelly, 2026-04-20 to 2026-04-21).
-**Related code:** `scripts/return_distribution.py`, `scripts/compute_sigma_table.py`, `src/prospector/underwriting/sizing.py`, `src/prospector/underwriting/portfolio.py`.
+**Related code:** `scripts/return_distribution.py`, `scripts/compute_sigma_table.py`, `src/prospector/strategies/pm_underwriting/sizing.py`, `src/prospector/strategies/pm_underwriting/portfolio.py`.
 
 ---
 
@@ -107,7 +107,7 @@ The big practical shift: **the book should be running ~3-4× more concurrent pos
 ## 5. Actions taken
 
 1. ~~**Raise min_edge_pp and tighten category filter.**~~ **Done 2026-04-21.** Setting `min_edge_pp=5` (from 3) drops ~90% of low-Sharpe noise trades while keeping the high-Sharpe slice (per §2.1).
-2. ~~**Switch per-position sizing from Kelly to equal-σ.**~~ **Done 2026-04-21.** Implemented in `src/prospector/underwriting/sizing.py` (σ-table loader) and `portfolio.size_position(sigma_i)`. Runner ranks candidates by `edge/σ_bin` (bin-level Sharpe proxy) and rejects any candidate that has no σ estimate at bin/pooled/aggregate level.
+2. ~~**Switch per-position sizing from Kelly to equal-σ.**~~ **Done 2026-04-21.** Implemented in `src/prospector/strategies/pm_underwriting/sizing.py` (σ-table loader) and `portfolio.size_position(sigma_i)`. Runner ranks candidates by `edge/σ_bin` (bin-level Sharpe proxy) and rejects any candidate that has no σ estimate at bin/pooled/aggregate level.
 3. ~~**Retire `max_category_frac`.**~~ **Done 2026-04-21.** Replaced with `max_bin_frac = 0.15` (per-side, per-5¢ bin). Finer granularity, matches the σ-table key, and keeps the 95-100¢ tail bin from dominating exposure even when its Sharpe is best.
 4. **A/B run:** Skipped. Kelly has no academic justification under the observed σ-dispersion, so a parallel run would only delay correction. Phase 3 Kelly book archived; fresh book launched under the new sizer.
 5. **Longer-term: VaR-based sizing for tail-heavy bins.** Still open. The 95-100¢ sell_yes bin has Sharpe 0.423 (σ_shrunk=22.4) but pathological kurtosis. Equal-σ with `max_bin_frac=0.15` bounds its total allocation, but a per-bin VaR constraint would be sharper. Revisit after 4-6 weeks of paper data.
@@ -129,7 +129,7 @@ The big practical shift: **the book should be running ~3-4× more concurrent pos
 | 2026-04-21 | **This doc** | Journey record + framework proposal. No code change yet. |
 | 2026-04-21 | Raised `min_edge_pp` default 3 → 5 | Action #1 from §5. Drops low-Sharpe filler; keeps high-Sharpe slice. |
 | 2026-04-21 | **Decided: no A/B vs Kelly.** Replace Kelly outright. | Kelly has no academic justification when per-bet σ varies 30× across bins; a parallel run only delays the correction. |
-| 2026-04-21 | Shipped σ-table builder + loader | `scripts/compute_sigma_table.py`, `src/prospector/underwriting/sizing.py`. Output: `data/calibration/sigma_table.json` (49 bins, 9 pools, aggregate σ=3.54 over 80,836 test-set trades). |
+| 2026-04-21 | Shipped σ-table builder + loader | `scripts/compute_sigma_table.py`, `src/prospector/strategies/pm_underwriting/sizing.py`. Output: `data/calibration/sigma_table.json` (49 bins, 9 pools, aggregate σ=3.54 over 80,836 test-set trades). |
 | 2026-04-21 | Replaced `size_position(edge_pp, …, kelly_fraction)` with `size_position(sigma_i)` | Portfolio formula: `book_σ_target × NAV / (σ_i × √N_target)`, clipped by `max_position_frac`. |
 | 2026-04-21 | Retired `max_category_frac`; added `max_bin_frac=0.15` | Per-(side, 5¢ bin) cap matches σ-table grain and replaces the blunter category cap. |
 | 2026-04-21 | Runner re-ranks by `edge_pp / σ_bin` | Bin-level Sharpe proxy — the best knob available at scan time. |
@@ -140,4 +140,5 @@ The big practical shift: **the book should be running ~3-4× more concurrent pos
 - Methodology: [`docs/implementation/methodology.md`](../implementation/methodology.md) §3.4 (current Kelly math), §4.7 (why the win rate is 29%)
 - Strategy prospectus: [`docs/rd/deep-dive-prediction-market-underwriting.md`](deep-dive-prediction-market-underwriting.md) — note the insurance framing pre-dates empirical discovery; treat §0-3 as the *intent*, not the observed distribution
 - Script: [`scripts/return_distribution.py`](../../scripts/return_distribution.py)
-- Portfolio impl: [`src/prospector/underwriting/portfolio.py`](../../src/prospector/underwriting/portfolio.py)
+- Portfolio impl: [`src/prospector/strategies/pm_underwriting/portfolio.py`](../../src/prospector/strategies/pm_underwriting/portfolio.py)
+- Dashboard: [`src/prospector/dashboard.py`](../../src/prospector/dashboard.py), manifest at [`data/paper/manifest.toml`](../../data/paper/manifest.toml)

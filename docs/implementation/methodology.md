@@ -448,7 +448,7 @@ The paper-trading stack mirrors Phase 2b's simulation in live form:
 
 - **Calibration store** — `data/calibration/store/calibration-<timestamp>.json` plus a `current.json` pointer. Built by `refresh_calibration_store.py` from the same HuggingFace dataset using Phase 1's methodology. The snapshot is immutable; swapping pointers is the recalibration primitive.
 - **Kalshi REST client** (`src/prospector/kalshi/`) — Pagination-aware market/event/orderbook endpoints. Scans by event first to avoid scraping the full market universe every tick.
-- **Paper portfolio** (`src/prospector/underwriting/portfolio.py`) — SQLite-backed. Tracks positions, NAV, cash, locked risk. Enforces all entry constraints (see §5.2). Models round-trip Kalshi taker fees as a conservative assumption.
+- **Paper portfolio** (`src/prospector/strategies/pm_underwriting/portfolio.py`) — SQLite-backed. Tracks positions, NAV, cash, locked risk. Enforces all entry constraints (see §5.2). Models round-trip Kalshi taker fees as a conservative assumption.
 - **Scanner** (`scanner.py`) — Walks active events, computes fee-adjusted edge vs the current calibration snapshot, emits Candidate objects.
 - **Monitor** (`monitor.py`) — Sweeps open positions, resolves against settled markets. Handles `voided` markets as zero-P&L closures.
 - **Runner** (`runner.py`, `paper_trade.py`) — Sweep → scan → rank → enter → snapshot. One tick per launchd invocation.
@@ -477,7 +477,7 @@ Equal-σ (risk parity) per §3.4: `risk_budget_i = book_σ_target × NAV / (σ_i
 
 - **Fees.** Live book charges round-trip `0.14 × P × (1-P) × contracts` at entry and deducts at resolution. This models paper execution as conservatively taker-priced; a maker fill in production would refund these.
 - **Voided markets.** Some Kalshi markets finalize without a binary outcome. Monitor treats these as zero-P&L closures and refunds risk + fees. Live book tolerates the edge case idempotently.
-- **Logging.** `data/paper/logs/paper_trade-YYYYMMDD.log`, rotated daily at UTC midnight via a shell wrapper. Stdout/stderr from launchd itself land in `launchd.log` for bootstrap diagnostics.
+- **Logging.** `data/paper/pm_underwriting/logs/paper_trade-YYYYMMDD.log`, rotated daily at UTC midnight via a shell wrapper. Stdout/stderr from launchd itself land in `launchd.log` for bootstrap diagnostics.
 
 ---
 

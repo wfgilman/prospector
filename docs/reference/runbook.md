@@ -104,10 +104,16 @@ python scripts/paper_trade.py --categories sports crypto --min-edge-pp 4.0
 ```
 
 **State:**
-- Portfolio DB: `data/paper/portfolio.db` (positions + daily_snapshots)
+- Portfolio DB: `data/paper/pm_underwriting/portfolio.db` (positions + daily_snapshots)
 - Calibration: `data/calibration/store/current.json`
 - σ table: `data/calibration/sigma_table.json` (built by `scripts/compute_sigma_table.py`)
-- Logs (under launchd): `data/paper/logs/paper_trade-YYYYMMDD.log` (daily, UTC)
+- Logs (under launchd): `data/paper/pm_underwriting/logs/paper_trade-YYYYMMDD.log` (daily, UTC)
+- Strategy manifest: `data/paper/manifest.toml` — discovery index for the dashboard; daemons ignore it
+
+Per-strategy directories under `data/paper/<strategy>/` keep each strategy's
+DB + logs isolated so a second strategy (e.g. `crypto_perp`) can ship
+without a restructure. The manifest file is the only check-in under
+`data/paper/`; DBs and logs stay gitignored.
 
 **Knobs** (see `scripts/paper_trade.py --help`):
 - `--initial-nav` (default 10,000) — seeds the portfolio on first run only
@@ -145,13 +151,28 @@ launchctl list | grep paper-trade
 launchctl start com.prospector.paper-trade
 
 # Tail today's log
-tail -f data/paper/logs/paper_trade-$(date -u +%Y%m%d).log
+tail -f data/paper/pm_underwriting/logs/paper_trade-$(date -u +%Y%m%d).log
 ```
 
 `StartInterval` counts from launch-time wall clock and queues a catch-up tick
 when the Mac wakes from sleep. `RunAtLoad` is false — the first tick fires
 after the 15 min interval elapses, so `launchctl load` doesn't duplicate a
 manual run.
+
+### Dashboard
+
+Streamlit dashboard for paper-trading strategies. Reads `data/paper/manifest.toml`
+and renders one panel per enabled strategy using the renderer for its position
+schema. Today only `kalshi_binary` exists; adding a new schema is a new renderer
+function in `src/prospector/dashboard.py`.
+
+```bash
+pip install -e .[dashboard]
+streamlit run scripts/dashboard.py
+```
+
+Set `PROSPECTOR_MANIFEST=<path>` to point at an alternate manifest (useful for
+smoke-testing against a copy of a DB before cutover).
 
 ---
 
@@ -173,7 +194,7 @@ python scripts/walk_forward_top_configs.py
 
 | Service | plist | Schedule | Log |
 |---|---|---|---|
-| Paper trader | `~/Library/LaunchAgents/com.prospector.paper-trade.plist` | Every 15 min | `data/paper/logs/paper_trade-YYYYMMDD.log` |
+| Paper trader | `~/Library/LaunchAgents/com.prospector.paper-trade.plist` | Every 15 min | `data/paper/pm_underwriting/logs/paper_trade-YYYYMMDD.log` |
 | Orderbook poller | `~/Library/LaunchAgents/com.prospector.orderbook.plist` | Persistent (KeepAlive) | `logs/orderbook.log` |
 | OHLCV refresh | `~/Library/LaunchAgents/com.prospector.ohlcv-refresh.plist` | Daily 2am | `logs/ohlcv-refresh.log` |
 

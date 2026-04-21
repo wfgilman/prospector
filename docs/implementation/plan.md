@@ -111,10 +111,10 @@ Validates that the calibrated edge exists in live markets and that orders can be
 ### Components Built
 
 1. **Kalshi API client** (`src/prospector/kalshi/`) — REST for market data, orderbook, resolution status.
-2. **Calibration store** (`src/prospector/underwriting/calibration.py`, `scripts/refresh_calibration_store.py`) — Persist and update calibration curves; current-pointer file.
-3. **Market scanner** (`src/prospector/underwriting/scanner.py`) — Polls active markets, classifies category, computes edge vs calibration.
-4. **Paper portfolio** (`src/prospector/underwriting/portfolio.py`) — SQLite-backed position tracker with position/event/category % of NAV caps, count-based diversity guardrails, fees.
-5. **Resolution monitor** (`src/prospector/underwriting/monitor.py`) — Sweeps open positions, resolves against market results.
+2. **Calibration store** (`src/prospector/strategies/pm_underwriting/calibration.py`, `scripts/refresh_calibration_store.py`) — Persist and update calibration curves; current-pointer file.
+3. **Market scanner** (`src/prospector/strategies/pm_underwriting/scanner.py`) — Polls active markets, classifies category, computes edge vs calibration.
+4. **Paper portfolio** (`src/prospector/strategies/pm_underwriting/portfolio.py`) — SQLite-backed position tracker with position/event/category % of NAV caps, count-based diversity guardrails, fees.
+5. **Resolution monitor** (`src/prospector/strategies/pm_underwriting/monitor.py`) — Sweeps open positions, resolves against market results.
 6. **Runner daemon** (`scripts/paper_trade.py`, `scripts/launchd/com.prospector.paper-trade.plist`) — Main loop; 15-min cadence; daily log rotation.
 
 ### Key Decisions

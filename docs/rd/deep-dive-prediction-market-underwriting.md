@@ -1,5 +1,7 @@
 # Deep Dive — Prediction Market Underwriting
 
+> **Revision note (2026-04-21):** This doc is the original strategy *prospectus* from mid-April 2026, preserved as the design intent. Empirical measurement during Phase 3 shows that edge ranking systematically fills the extreme-price bins, which are 9:1 lottery-ticket payoffs rather than the insurance-premium payoff profile described in §0-3 below. The "write many small policies" framing captures the *portfolio-construction philosophy* (diversified, calibration-driven, LLN-reliant) but misrepresents the *per-trade payoff shape* the ranker actually produces. For the empirical distribution and the consequent sizing-framework reevaluation, see [`docs/rd/sizing-reevaluation.md`](sizing-reevaluation.md). For per-phase methodology, see [`docs/implementation/methodology.md`](../implementation/methodology.md) §4.7 and §6.
+
 ## 0. TL;DR
 
 Insurance companies don't predict individual fires. They price portfolios of risks by calibrating their frequency models against decades of claims data, then charge a premium above expected loss, and rely on diversification across independent policies to converge to expected value.

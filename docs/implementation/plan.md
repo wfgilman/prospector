@@ -14,7 +14,9 @@ For the paused Elder-template parameter-search track, see [`docs/implementation/
 1. **Sports parlay overpricing** — Multi-leg sports bets systematically overpriced (prospect theory). Large edge (~4-7pp), but only ~6 months of history.
 2. **Crypto longshot overpricing** — Classic favorite-longshot bias. Moderate edge (~3-4pp), more persistent.
 
-**Mechanism:** Build per-category calibration curves (implied probability vs actual resolution rate) from historical data. When a live market's price deviates from the calibration curve by more than the fee-adjusted threshold, take the other side. Size with fractional Kelly (0.25x).
+**Mechanism:** Build per-category calibration curves (implied probability vs actual resolution rate) from historical data. When a live market's price deviates from the calibration curve by more than the fee-adjusted threshold, take the other side. Current sizing is fractional Kelly (0.25x) + per-position/event/category % of NAV caps + count-based diversity guardrails; this framework is under active reevaluation — see [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md).
+
+**Payoff profile (important):** the edge ranker systematically picks extreme-price bins (80-95¢ implied) where the label "underwriting" is misleading. At those prices, the actual per-trade distribution is a 9:1 lottery ticket: ~29% win rate × large wins vs. ~71% loss rate × small losses. The LLN requires ~100+ independent trials for the book to converge — more than the current caps comfortably permit. This is the central tension the sizing reevaluation is trying to resolve.
 
 **Data source:** TrevorJS/kalshi-trades HuggingFace dataset (154M trades, 17.5M markets, June 2021 – Jan 2026). Internally validated (99.71% consistency). Stored at `data/kalshi_hf/` (5.3 GB parquet, gitignored).
 
@@ -27,8 +29,9 @@ For the paused Elder-template parameter-search track, see [`docs/implementation/
 | 1 | Calibration curve | **Complete** | GO — 6 qualifying bins aggregate, 16 in sports parlays. Systematic overpricing confirmed. |
 | 2 | Walk-forward backtest | **Complete** | GO — Sharpe 7.44, 66.9% WR, 83.6K trades. Calibration holds out-of-sample. |
 | 2b | Capital-constrained simulation | **Complete** | GO at 20 trades/day: Sharpe 9.19, 303% return/41d, 3.4% max DD. Sports dominates (86% of trades). |
-| 3 | Paper trading | **Next** | Validate execution quality and calibration on truly live data. |
-| 4 | Live (small) | Pending | 5% of intended NAV after Phase 3 validation. |
+| 3 | Paper trading | **In progress** | Live via launchd since 2026-04-20. Diversity + fees + category cap wired. |
+| 3.5 | Sizing-framework reevaluation | **In progress** | Per-bet Sharpe measured empirically (0.057 all / 0.110 high-edge). See [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md). |
+| 4 | Live (small) | Pending | 5% of intended NAV after Phase 3 results + sizing decision. |
 
 ---
 
@@ -101,28 +104,29 @@ Realistic portfolio simulation with concurrent position tracking, daily capital 
 
 ---
 
-## Phase 3 — Paper Trading (Next)
+## Phase 3 — Paper Trading (In Progress)
 
-Validate that the calibrated edge exists in live markets and that orders can be filled at edge prices.
+Validates that the calibrated edge exists in live markets and that orders can be filled at edge prices. Runs under launchd every 15 min.
 
-### Components to Build
+### Components Built
 
-1. **Kalshi API client** — REST for market data, orderbook, resolution status. Reference: `kalshi-arb-trader` sibling project.
-2. **Calibration store** — Persist and periodically update calibration curves.
-3. **Market scanner** — Poll active markets, classify category, compute edge vs calibration.
-4. **Paper portfolio** — SQLite-backed position tracker with capital constraints (same as Phase 2b).
-5. **Resolution monitor** — Poll for resolved markets, record P&L.
-6. **Runner daemon** — Main loop under launchd. Scan interval ~15 min, 20 trades/day cap.
+1. **Kalshi API client** (`src/prospector/kalshi/`) — REST for market data, orderbook, resolution status.
+2. **Calibration store** (`src/prospector/underwriting/calibration.py`, `scripts/refresh_calibration_store.py`) — Persist and update calibration curves; current-pointer file.
+3. **Market scanner** (`src/prospector/underwriting/scanner.py`) — Polls active markets, classifies category, computes edge vs calibration.
+4. **Paper portfolio** (`src/prospector/underwriting/portfolio.py`) — SQLite-backed position tracker with position/event/category % of NAV caps, count-based diversity guardrails, fees.
+5. **Resolution monitor** (`src/prospector/underwriting/monitor.py`) — Sweeps open positions, resolves against market results.
+6. **Runner daemon** (`scripts/paper_trade.py`, `scripts/launchd/com.prospector.paper-trade.plist`) — Main loop; 15-min cadence; daily log rotation.
 
 ### Key Decisions
 
 | Decision | Backtest Assumption | Paper Trading Approach |
 |---|---|---|
 | Entry timing | PIT (50% of market duration) | When scanner finds edge (any time) |
-| Pricing | Maker (zero fees) | Test both maker and taker |
-| Min edge | 2pp | Start at 3pp (conservative) |
-| Categories | All | Start with crypto + sports only |
+| Pricing | Maker (zero fees) | Paper assumes maker; fees modeled as round-trip taker to be conservative |
+| Min edge | 2pp | Running at 3pp; sizing reeval proposes raising to 5pp |
+| Categories | All | Sports + crypto (best Sharpe × volume trade-off) |
 | Throughput | 20/day cap | Same |
+| Sizing | Quarter-Kelly + 1% position cap | **Under reevaluation — see §Phase 3.5** |
 
 ### Success Criteria
 
@@ -133,6 +137,21 @@ Validate that the calibrated edge exists in live markets and that orders can be 
 
 ---
 
+## Phase 3.5 — Sizing Reevaluation (In Progress)
+
+Mid-Phase-3 we surfaced a structural mismatch between the sizing framework and the strategy's realized payoff profile. Edge ranking fills the extreme-price bins, which are 9:1 lottery tickets — not the win-often-lose-small insurance profile the deep-dive assumed. Kelly-per-bet + dollar caps + count caps aren't aligned with this distribution.
+
+**Empirical measurement:** `scripts/return_distribution.py` on the walk-forward test set shows per-bet Sharpe of 0.057 (all trades) or 0.110 (high-edge slice). For book-level 90% confidence: 136 positions needed; we are running ~36.
+
+**Proposed direction:** CI-based book-level sizing (target portfolio Sharpe → derive N and per-bet size) rather than Kelly-per-bet + ad-hoc caps. Details and tradeoffs in [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md).
+
+**Near-term actions (ranked):**
+1. Raise `min_edge_pp` from 3 to 5 (cheap; drops low-Sharpe filler).
+2. Move to equal-σ per-position sizing.
+3. Run a parallel paper portfolio with the new sizer; compare realized Sharpe over 4-6 weeks.
+
+---
+
 ## Phase 4 — Live (Small)
 
-Deploy at 5% of intended NAV after Phase 3 validation. Reuse paper trading infrastructure with real order submission. Details TBD pending Phase 3 results.
+Deploy at 5% of intended NAV after Phase 3 results + sizing decision. Reuse paper trading infrastructure with real order submission. Details TBD.

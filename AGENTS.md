@@ -12,21 +12,24 @@ The full strategy prospectus is in `docs/rd/deep-dive-prediction-market-underwri
 
 ---
 
-## Current Status (as of 2026-04-19)
+## Current Status (as of 2026-04-21)
 
-**Active track: PM Underwriting — Preparing for Phase 3 (Paper Trading)**
+**Active track: PM Underwriting — Phase 3 live paper trading with sizing reevaluation**
 
 | Phase | Description | Status | Result |
 |---|---|---|---|
 | 1 | Calibration curve | **Complete** | GO — 6 qualifying bins aggregate, 16 in sports. |
 | 2 | Walk-forward backtest | **Complete** | GO — Sharpe 7.44, 66.9% WR, calibration holds OOS. |
 | 2b | Capital-constrained simulation | **Complete** | GO — Sharpe 9.19 at 20 trades/day, 303% return/41d. |
-| 3 | Paper trading | **Next** | Validate execution quality on live Kalshi markets. |
-| 4 | Live (small) | Pending | 5% of intended NAV after Phase 3. |
+| 3 | Paper trading | **In progress** | Live since 2026-04-20 via launchd. Diversity + fees wired. |
+| 3.5 | Sizing-framework reevaluation | **In progress** | Kelly-per-bet under review; moving toward CI-based book-level sizing. See `docs/rd/sizing-reevaluation.md`. |
+| 4 | Live (small) | Pending | Gated on Phase 3 results + sizing decision. |
 
 **Two confirmed edges:**
 1. Sports parlay overpricing (large, ~6 months history, prospect theory)
 2. Crypto longshot overpricing (moderate, more persistent, favorite-longshot bias)
+
+**Payoff profile note:** ranking candidates by edge systematically selects extreme-price bins (80-95¢), which are 9:1 *lottery-ticket* payoffs, not the win-often/lose-small insurance profile implied by the "underwriting" label. See `docs/implementation/methodology.md` §4.7. This reshapes the sizing problem (see sizing reevaluation doc).
 
 **Elder-template track:** Paused as of 2026-04-14 — LLM inner loop falsified, walk-forward killed all top configs. See `docs/rd/elder-track-pivot.md`.
 
@@ -49,6 +52,9 @@ prospector/
 │   ├── build_calibration_curve.py     <- Phase 1: PIT calibration from Kalshi data
 │   ├── walk_forward_backtest.py       <- Phase 2: train/test walk-forward simulation
 │   ├── capital_constrained_sim.py     <- Phase 2b: realistic portfolio with capital constraints
+│   ├── return_distribution.py         <- Phase 3.5: per-trade μ/σ by stratum; sample-size requirements
+│   ├── paper_trade.py                 <- Phase 3: live paper-trading daemon (launchd)
+│   ├── refresh_calibration_store.py   <- Phase 3: rebuild persisted calibration snapshot
 │   └── walk_forward_top_configs.py    <- Elder track: validate top ledger configs
 ├── tests/
 ├── data/
@@ -65,7 +71,8 @@ prospector/
     │   ├── strategy-families.md         <- Strategy queue
     │   ├── sibling-project-insights.md
     │   ├── elder-track-pivot.md         <- Why Elder track was paused
-    │   └── elder-track-walk-forward.md  <- Elder walk-forward validation results
+    │   ├── elder-track-walk-forward.md  <- Elder walk-forward validation results
+    │   └── sizing-reevaluation.md       <- Phase 3.5: Kelly-per-bet → CI-based book-level sizing
     ├── implementation/
     │   ├── plan.md                      <- PM underwriting phases and progress
     │   └── archived/                    <- Elder track specs (paused)

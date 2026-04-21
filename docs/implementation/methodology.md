@@ -12,7 +12,9 @@ For the strategic rationale and theoretical framework, see [`docs/rd/deep-dive-p
 2. [Phase 1: Calibration Curve](#2-phase-1-calibration-curve)
 3. [Phase 2: Walk-Forward Backtest](#3-phase-2-walk-forward-backtest)
 4. [Phase 2b: Capital-Constrained Simulation](#4-phase-2b-capital-constrained-simulation)
-5. [Key Assumptions and Limitations](#5-key-assumptions-and-limitations)
+5. [Phase 3: Paper Trading (Live)](#5-phase-3-paper-trading-live)
+6. [Phase 3.5: Return-Distribution Analysis](#6-phase-35-return-distribution-analysis)
+7. [Key Assumptions and Limitations](#7-key-assumptions-and-limitations)
 
 ---
 
@@ -212,6 +214,8 @@ For each test-set market, we look up the calibrated edge:
 Markets with edge < 2pp or no matching bin are skipped (no trade).
 
 ### 3.4 Position Sizing — Fractional Kelly
+
+> **Note (2026-04-21):** This section describes the sizing rule used for the Phase 2 backtest and inherited by Phase 3 paper trading. Phase 3.5 is actively reevaluating it — per-bet Sharpe measurement indicates Kelly + dollar caps is undersizing the book relative to what the payoff distribution requires. See [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md).
 
 For each trade, we compute the optimal bet fraction using the Kelly criterion adapted for binary options:
 
@@ -413,7 +417,7 @@ Expected P&L = 0.15 × $900 - 0.85 × $100 = $135 - $85 = +$50 per trade
 
 The unconstrained simulation includes many trades at moderate prices (40-60 cents) where win rates are closer to 50:50. The constrained simulation preferentially fills the extreme bins because they have the largest edge.
 
-Low win rate + high payoff ratio = positive expected value. This is exactly how insurance underwriting works: most policies don't pay out (insurer "wins"), but catastrophic claims ("losses") are much larger than individual premiums.
+Low win rate + high payoff ratio = positive expected value. This is *not* the insurance-underwriting payoff profile the strategy prospectus described (win-often-lose-small, many independent policies). The edge ranker systematically inverts that pattern — it selects the *buyer* of the lottery ticket, not the *writer* of the insurance. The sample-size implications (large N needed for the LLN to work) are what drive the Phase 3.5 sizing reevaluation in [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md).
 
 ### 4.8 Daily Snapshots
 
@@ -432,7 +436,95 @@ These snapshots drive the Sharpe ratio (computed from daily NAV returns), max dr
 
 ---
 
-## 5. Key Assumptions and Limitations
+## 5. Phase 3: Paper Trading (Live)
+
+**Scripts:** `scripts/paper_trade.py` (runner), `scripts/refresh_calibration_store.py` (snapshot builder).
+**Launched:** 2026-04-20 under launchd (15-min cadence, daily UTC log rotation).
+
+### 5.1 Infrastructure
+
+The paper-trading stack mirrors Phase 2b's simulation in live form:
+
+- **Calibration store** — `data/calibration/store/calibration-<timestamp>.json` plus a `current.json` pointer. Built by `refresh_calibration_store.py` from the same HuggingFace dataset using Phase 1's methodology. The snapshot is immutable; swapping pointers is the recalibration primitive.
+- **Kalshi REST client** (`src/prospector/kalshi/`) — Pagination-aware market/event/orderbook endpoints. Scans by event first to avoid scraping the full market universe every tick.
+- **Paper portfolio** (`src/prospector/underwriting/portfolio.py`) — SQLite-backed. Tracks positions, NAV, cash, locked risk. Enforces all entry constraints (see §5.2). Models round-trip Kalshi taker fees as a conservative assumption.
+- **Scanner** (`scanner.py`) — Walks active events, computes fee-adjusted edge vs the current calibration snapshot, emits Candidate objects.
+- **Monitor** (`monitor.py`) — Sweeps open positions, resolves against settled markets. Handles `voided` markets as zero-P&L closures.
+- **Runner** (`runner.py`, `paper_trade.py`) — Sweep → scan → rank → enter → snapshot. One tick per launchd invocation.
+
+### 5.2 Constraint hierarchy (current live config)
+
+Applied at entry time, in order. The first failing check rejects the candidate with a reason logged; remaining candidates in the tick get their turn.
+
+1. **Per-position $ cap** — `max_position_frac = 0.01` (1% of NAV). Bounds worst-case single-trade loss.
+2. **Available cash** — `risk_budget ≤ cash`. Hard budget constraint.
+3. **Per-event $ cap** — `max_event_frac = 0.05` (5% of NAV). Prevents stacking multiple contracts on the same event.
+4. **Per-category $ cap** — `max_category_frac = 0.20` (20% of NAV). Bounds correlated-category drawdown (all sports markets share league-level shocks).
+5. **Per-event count** — `max_positions_per_event = 1`. Simple diversity guardrail.
+6. **Per-subseries count** — `max_positions_per_subseries = 1`. Subseries = event_ticker minus trailing segment, typically a game/round grouping.
+7. **Per-series count** — `max_positions_per_series = 3`. Series = series_ticker (e.g. KXNFL).
+8. **Daily trade cap** — `max_trades_per_day = 20`. Matches the capital-constrained sim's best throughput slot.
+9. **No duplicate open ticker** — at most one open position per market.
+
+Dollar caps (1-4) are primary; count caps (5-7) are derivative guardrails against correlation stacking that the dollar caps don't catch.
+
+### 5.3 Sizing
+
+Currently quarter-Kelly (`f* = edge / P` for sell-yes, `edge / (1 - P)` for buy-yes), clamped to the per-position $ cap. This is the same rule as Phase 2 with one correction: the denominator was `P/(1-P)` in a pre-live revision of the code, which undersized high-price sell-yes bets by a factor of `(1-P)` — negligible at P=0.5 but 100× at P=0.99.
+
+See §3.4 note — sizing is under Phase 3.5 reevaluation.
+
+### 5.4 Operational notes
+
+- **Fees.** Live book charges round-trip `0.14 × P × (1-P) × contracts` at entry and deducts at resolution. This models paper execution as conservatively taker-priced; a maker fill in production would refund these.
+- **Voided markets.** Some Kalshi markets finalize without a binary outcome. Monitor treats these as zero-P&L closures and refunds risk + fees. Live book tolerates the edge case idempotently.
+- **Logging.** `data/paper/logs/paper_trade-YYYYMMDD.log`, rotated daily at UTC midnight via a shell wrapper. Stdout/stderr from launchd itself land in `launchd.log` for bootstrap diagnostics.
+
+---
+
+## 6. Phase 3.5: Return-Distribution Analysis
+
+**Script:** `scripts/return_distribution.py`.
+**Purpose:** Measure per-trade μ, σ, Sharpe from the walk-forward test set so the sizing framework can be grounded in the empirical distribution instead of Kelly's known-edge assumption.
+
+### 6.1 Per-trade return metric
+
+Each trade's return is expressed as `pnl / risk_budget`, which collapses to:
+
+- `+reward_per_risk` on win (dimensionless payoff multiple)
+- `-1.0` on loss
+
+This normalization lets us compare bins with wildly different absolute P&L magnitudes. A sell_yes at 90¢ has `reward_per_risk = 9` while a sell_yes at 10¢ has `reward_per_risk ≈ 0.11` — same strategy, very different distributions.
+
+### 6.2 Top-line results (test set, n = 81,556)
+
+| Stratum | n | Win rate | Sharpe | N for P≥90% |
+|---|---|---|---|---|
+| All trades (edge ≥ 2pp) | 81,556 | 66.2% | **0.057** | 511 |
+| High-edge slice (edge ≥ 5pp) | 6,523 | 39.4% | **0.110** | 136 |
+
+The formula `N ≥ (z_α / Sharpe)²` (with z₀.₉₀ = 1.28) assumes independent, Gaussian-aggregate bets.
+
+### 6.3 Per-bin Sharpe dispersion
+
+Per-bet Sharpe varies ~5× across price bins. The best slices for risk-adjusted return:
+
+| Side | Price bin | Sharpe | Win rate | Avg payoff/$risk |
+|---|---|---|---|---|
+| sell_yes | 95-100¢ | 0.285 | 12.5% | 65.7 |
+| sell_yes | 85-90¢ | 0.180 | 20.2% | 6.7 |
+| sell_yes | 90-95¢ | 0.169 | 14.1% | 11.3 |
+| buy_yes | 0-5¢ | 0.149 | 6.0% | 47.8 |
+
+Aggregate Sharpe (0.057) is dragged down by ~70,000 low-Sharpe filler trades in the 5-50¢ sell_yes range. Raising the minimum-edge filter from 2pp to 5pp drops those bins without giving up the high-Sharpe slices.
+
+### 6.4 Implication
+
+The current live book (~36 positions, quarter-Kelly) is 4× to 14× undersized relative to the N needed for book-level 90% confidence. The framework is not wrong — it's sized for the wrong distribution. The full argument and proposed changes are in [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md).
+
+---
+
+## 7. Key Assumptions and Limitations
 
 ### Assumptions built into all three phases
 

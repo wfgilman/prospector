@@ -298,7 +298,7 @@ The key creative insight: the most novel strategies come from applying framework
 |---|---|---|---|---|---|---|
 | 1–8 | (original families) | (see above) | | | | |
 | **9** | **PM underwriting (actuarial)** | **V.High** | **V.High** | **V.High** | **~Yes** | **→ deep-dive** |
-| 10 | Cross-market implied probability | High | Med | V.High | Yes | Strong #2 |
+| 10 | **Cross-market implied probability (Kalshi × Hyperliquid)** | High | Med | V.High | Yes | **→ deep-dive** (second R&D track, 2026-04-22) |
 | 11 | Cross-exchange funding spread | Low-Med | High | Low | Yes | Proven baseline |
 | 12 | Weather ensemble model | High | Daily | Med-High | ~No | Parallel track |
 | 13 | Flow classification (microstructure) | High | High | High | ~Yes | Research candidate |
@@ -317,3 +317,18 @@ The key creative insight: the most novel strategies come from applying framework
 5. **It's leverage-friendly and scales with diversification.** The Acum model: small edge per trade, many trades, high leverage on the portfolio. Exactly the insurance-underwriting structure.
 
 The deep-dive is in `deep-dive-prediction-market-underwriting.md`.
+
+---
+
+# Second R&D track selected — 2026-04-22
+
+With PM Underwriting (#9) now in Phase 3 paper trading, #10 (Cross-market implied probability, Kalshi × Hyperliquid) has been selected as the second R&D track to run in parallel. Rationale:
+
+- Fills the single biggest portfolio gap (every sibling project trades within one venue).
+- Returns structurally uncorrelated with the PM Underwriting book (directional calibration vs. delta-neutral convergence).
+- Kalshi `KXBTC-*` / `KXETH-*` range ladders are a literal 40-strike implied CDF — no surface-fitting required.
+- Cleanest kill criterion of anything in the queue: one-week parquet-level divergence study against Hyperliquid perp-implied distribution gives a binary go/no-go.
+
+Deep-dive: [`deep-dive-kalshi-hyperliquid-vol-surface.md`](deep-dive-kalshi-hyperliquid-vol-surface.md).
+
+Fallback if #10 fails the Week-1 spike: #4 (Kalshi ↔ crypto narrative spread) — deep-dive already written, 1-week FOMC event study ready to run.

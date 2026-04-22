@@ -427,3 +427,74 @@ Each reformulation is itself a new pre-registration exercise — no free paramet
 ### 13.4 Methodology discipline for Phase 1
 
 Same discipline as §5.0 carries: each diagnostic has a pre-registered output format and a pre-committed interpretation rule. The four diagnostics run on the full post-completeness-filter panel (both train and test — we already know the test-fold result under the original measurement, so the added risk from using both folds for descriptive statistics is small). Findings get written up in §14 before any further action. No cherry-picking by slicing the fold or the universe after seeing results.
+
+---
+
+## 14. Phase 1 diagnostic findings (2026-04-22)
+
+**Pre-registered gate: 1 of 4 diagnostics passes → proceed to Phase 2.** But the passing diagnostic reframes the thesis in a way that requires a user decision before continuing.
+
+### 14.1 Results
+
+| # | Diagnostic | Pre-registered rule | Outcome | Pass? |
+|---|---|---|---|---|
+| D1 | Per-bucket-position signed gap (renorm + raw) | \|mean\| > 3pp AND \|t\|  > 3 in both spaces | Renorm: −10.08pp at rel_pos=0, t=−50 (n=4,601). Raw: +16.78pp at rel_pos=+17, t=+17.5 (n=901) | **PASS** |
+| D2 | Terminal convergence (gap vs. life decile) | slope < −0.005/decile | slope = −0.0005/decile (6.1pp gap flat across life) | FAIL |
+| D3 | Empirical-bootstrap reference vs. lognormal | emp median < 50% of lognormal median | emp / lognormal ratio = 1.016 (identical) | FAIL |
+| D4 | Moderate-volume universe (n_trades 100–500) | gap > 2× high-vol AND β < −0.10 | gap ratio = 1.23, β = −0.087 | FAIL |
+
+### 14.2 What the passing diagnostic actually found
+
+D1's signal is structural and massive, but it is the **favorite-longshot bias**, not a new cross-market phenomenon.
+
+In raw space (prices you'd actually trade at), Kalshi systematically prices far-OTM range buckets at meaningful probabilities (~5–15¢) where the lognormal assigns near-zero probability. The wedge peaks at rel_pos ±17 (~$8,500 OTM at a $500 bucket width) with mean signed gap +16.78pp and t-stat 17.5. This is the classic small-probability-overweighting prospect-theory effect documented across sports betting, horse racing, and prediction markets — and already identified in this project's Phase 1 PM Underwriting calibration work (crypto longshots show favorite-longshot bias in 5/20 bins).
+
+D3 closes an important door: the lognormal reference and an empirical-bootstrap from BTC's own 25h return distribution give median gaps that agree to within 2%. The lognormal is not the wrong reference family. Kalshi's distribution really does deviate from BTC's true terminal-price distribution in the tails — the deviation isn't a lognormal-fitting artifact.
+
+### 14.3 What the failing diagnostics tell us
+
+- **D2 (no terminal convergence):** Gaps don't mechanically shrink across event life. Consistent with the wedge being a persistent structural bias in how Kalshi traders price tails, not a short-term mispricing that resolves as expiry approaches.
+- **D3 (empirical ≈ lognormal):** Rules out "we just need a better reference model" — the two distributions agree on BTC's underlying stochastics. The gap is in Kalshi's pricing, not our measurement.
+- **D4 (moderate-volume not materially different):** The bias is present in both high- and moderate-volume events, with only modestly larger gaps on thinner events. No hidden gold mine in the low-volume slice.
+
+### 14.4 Thesis reframe
+
+The #10 prospectus proposed: *cross-market arbitrage between a prediction-market-implied terminal distribution and a perp-implied terminal distribution, with delta-neutral hedging*. The phenomenon we actually found is: *Kalshi exhibits favorite-longshot bias in crypto range contracts, which shows up as a persistent wedge vs. any accurate reference for BTC's terminal-price distribution*.
+
+These are related but distinct:
+
+| Feature | Prospectus #10 | Phase 1 finding | PM Underwriting (Phase 1–3) |
+|---|---|---|---|
+| Source of edge | Cross-market audience mismatch | Prospect-theory tail overpricing | Category-specific calibration gaps |
+| Signal per trade | Divergence between two distributions | Mispricing at far-OTM buckets | Mispricing at extreme-price bins (80–95¢ or 5–20¢) |
+| Market neutrality | Delta-neutral via perp | **Not inherent — but achievable via perp hedge** | Not hedged; directional per-trade |
+| Holding period | Intraday convergence | Hold to event resolution | Hold to event resolution |
+
+The delta-neutrality angle *is* net-new. PM Underwriting takes directional Kalshi positions and accepts the path-dependent loss distribution (9:1 lottery payoff profile — see `sizing-reevaluation.md`). A delta-hedged version of the same longshot-bias edge would:
+
+- Convert the lottery-ticket payoff to a more continuous P&L stream
+- Allow larger per-trade sizing under a given σ budget
+- Add hedging cost (perp fees + funding drag + tracking error from lognormal mis-specification vs. BTC's actual path)
+
+Whether that trade-off is net positive is an open empirical question.
+
+### 14.5 Decision point
+
+The phase-gate formally passes (1/4 ≥ 1). But before investing 2 weeks in Phase 2 data pipeline work, the investor (not just the analyst) needs to decide:
+
+**Option A — Continue #10 as delta-hedged longshot bias.** Treat the finding as a genuinely new strategy variant: same Kalshi edge PM exploits, but market-neutralized via perp hedging. Phase 2 data pipeline is still warranted. Phase 3 re-validates with clean data and quantifies the hedging-cost drag to decide if the market-neutral version clears a meaningful Sharpe hurdle over the directional PM version.
+
+**Option B — Fold the finding into PM Underwriting as a hedging overlay.** PM is already running; adding a perp-hedge leg is a ~1-week enhancement rather than a standalone track. Abandon the #10 standalone concept. Proceed to #4 (Kalshi ↔ crypto narrative spread) as the next R&D track — it targets a genuinely different information-transmission phenomenon.
+
+**Option C — Declare #10 done, pivot to #4.** The phase gate technically passed, but the signal that passed is one we already trade. Move on; revisit delta-hedging as a potential PM enhancement if/when the paper book shows a tail-risk profile that warrants it.
+
+My recommendation is **B**: the Phase 1 finding is real but too close to what PM already monetizes to justify a separate research/data-pipeline investment just for #10. Folding delta-hedging into PM is a lighter commitment that captures the incremental value; #4 is a structurally different edge and deserves the next track slot. The data-pipeline build (Phase 2) remains load-bearing regardless — it should proceed on its own merit as core infrastructure rather than as a #10 blocker.
+
+### 14.6 Artifacts
+
+- `scripts/vol_surface_diagnostic.py` — locked-hyperparameter diagnostic runner
+- `data/vol_surface/diagnostic/d1_signed_gap_by_rel_position.parquet` (renorm + raw space tables)
+- `data/vol_surface/diagnostic/d2_gap_by_life_decile.parquet`
+- `data/vol_surface/diagnostic/d3_gap_emp_vs_lognormal.parquet`
+- `data/vol_surface/diagnostic/d4_moderate_volume_gaps.parquet`
+- `data/vol_surface/diagnostic/summary.txt` — plain-text decision record

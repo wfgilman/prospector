@@ -20,7 +20,7 @@ import httpx
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
-from prospector.kalshi.models import Market, Orderbook, OrderbookLevel, Position
+from prospector.kalshi.models import Market, Orderbook, OrderbookLevel, Position, Trade
 
 logger = logging.getLogger(__name__)
 
@@ -130,10 +130,21 @@ class KalshiClient:
         ob = data.get("orderbook_fp", data.get("orderbook", data))
         return _parse_orderbook(ticker, ob)
 
-    def iter_events(self, status: str = "open") -> Iterator[dict]:
+    def iter_events(
+        self,
+        status: str = "open",
+        series_ticker: str | None = None,
+    ) -> Iterator[dict]:
+        """Page through events. `status` may be 'open', 'closed', 'settled',
+        or a comma-separated combination (Kalshi's API accepts multiple).
+
+        `series_ticker` narrows to a single series (e.g., 'KXBTC', 'FED') —
+        essential for backfill so we don't iterate the full universe."""
         cursor: str | None = None
         while True:
             path = f"{API_PREFIX}/events?status={status}&limit={_PAGE_LIMIT}"
+            if series_ticker:
+                path += f"&series_ticker={series_ticker}"
             if cursor:
                 path += f"&cursor={cursor}"
             data = self.get(path)
@@ -167,6 +178,40 @@ class KalshiClient:
                 yield _parse_market(market)
             cursor = data.get("cursor") or None
             if not cursor or len(markets) < _PAGE_LIMIT:
+                return
+            time.sleep(0.3)
+
+    def iter_trades(
+        self,
+        ticker: str | None = None,
+        *,
+        min_ts: int | None = None,
+        max_ts: int | None = None,
+    ) -> Iterator[Trade]:
+        """Page through historical trades.
+
+        Kalshi's `/markets/trades` accepts optional `ticker`, `min_ts`,
+        `max_ts` (seconds since epoch), and cursor pagination. Trades are
+        returned newest-first. Without a ticker filter the endpoint walks
+        the global trade stream — useful for sanity checks but wrong for
+        backfill; callers typically pass a ticker."""
+        cursor: str | None = None
+        while True:
+            path = f"{API_PREFIX}/markets/trades?limit={_PAGE_LIMIT}"
+            if ticker:
+                path += f"&ticker={ticker}"
+            if min_ts is not None:
+                path += f"&min_ts={min_ts}"
+            if max_ts is not None:
+                path += f"&max_ts={max_ts}"
+            if cursor:
+                path += f"&cursor={cursor}"
+            data = self.get(path)
+            trades = data.get("trades", [])
+            for raw in trades:
+                yield _parse_trade(raw)
+            cursor = data.get("cursor") or None
+            if not cursor or len(trades) < _PAGE_LIMIT:
                 return
             time.sleep(0.3)
 
@@ -305,6 +350,33 @@ def _parse_market(raw: dict) -> Market:
         open_interest=int(raw.get("open_interest", 0) or 0),
         category=raw.get("category", "") or "",
         raw=raw,
+    )
+
+
+def _parse_trade(raw: dict) -> Trade:
+    """Normalize a Kalshi trade record. Prices are stored in [0, 1] floats;
+    Kalshi publishes `yes_price`/`no_price` as cent integers and may also
+    publish `*_dollars` string fields in the post-2026 API."""
+    yes = _parse_price(raw.get("yes_price")) or 0.0
+    no = _parse_price(raw.get("no_price")) or 0.0
+    # Prefer the more precise *_dollars fields if present.
+    yes_dollars = _parse_price(raw.get("yes_price_dollars"), default_scale_if_gt_one=False)
+    if yes_dollars is not None:
+        yes = yes_dollars
+    no_dollars = _parse_price(raw.get("no_price_dollars"), default_scale_if_gt_one=False)
+    if no_dollars is not None:
+        no = no_dollars
+    created = _parse_timestamp(raw.get("created_time"))
+    if created is None:
+        raise KalshiError(f"trade missing created_time: {raw}")
+    return Trade(
+        trade_id=str(raw.get("trade_id", "")),
+        ticker=str(raw.get("ticker", "")),
+        count=int(raw.get("count", 0) or 0),
+        yes_price=yes,
+        no_price=no,
+        taker_side=str(raw.get("taker_side", "")),
+        created_time=created,
     )
 
 

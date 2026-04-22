@@ -11,6 +11,7 @@ venv/
 data/ohlcv/
 data/orderbook/
 data/kalshi_hf/
+data/kalshi/
 data/calibration/
 data/vol_surface/
 data/fomc/

@@ -16,6 +16,7 @@ from prospector.kalshi.client import (
     _parse_orderbook,
     _parse_position,
     _parse_price,
+    _parse_trade,
 )
 
 
@@ -336,3 +337,115 @@ class TestEndpoints:
         client._http = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://t")
         monkeypatch.setattr("prospector.kalshi.client.time.sleep", lambda _x: None)
         assert client.get_balance() == 1234.56
+
+
+class TestParseTrade:
+    def test_parses_cent_prices(self):
+        raw = {
+            "trade_id": "t-1",
+            "ticker": "KXBTC-25JAN0117-B84500",
+            "count": 10,
+            "yes_price": 42,
+            "no_price": 58,
+            "taker_side": "yes",
+            "created_time": "2025-01-01T10:30:45.123Z",
+        }
+        trade = _parse_trade(raw)
+        assert trade.trade_id == "t-1"
+        assert trade.count == 10
+        assert trade.yes_price == 0.42
+        assert trade.no_price == 0.58
+        assert trade.taker_side == "yes"
+        assert trade.created_time.year == 2025
+
+    def test_prefers_dollar_fields_when_present(self):
+        raw = {
+            "trade_id": "t-2", "ticker": "X", "count": 1,
+            "yes_price": 42, "yes_price_dollars": "0.4237",
+            "no_price": 58, "no_price_dollars": "0.5763",
+            "taker_side": "no", "created_time": "2026-01-01T00:00:00Z",
+        }
+        trade = _parse_trade(raw)
+        assert trade.yes_price == 0.4237
+        assert trade.no_price == 0.5763
+
+    def test_missing_created_time_raises(self):
+        raw = {
+            "trade_id": "t-3", "ticker": "X", "count": 1,
+            "yes_price": 50, "no_price": 50, "taker_side": "yes",
+        }
+        with pytest.raises(KalshiError, match="created_time"):
+            _parse_trade(raw)
+
+
+class TestIterTrades:
+    def test_paginates_and_stops_on_empty_cursor(self, client, monkeypatch):
+        page1 = {
+            "trades": [
+                {"trade_id": f"t{i}", "ticker": "X", "count": 1,
+                 "yes_price": 50, "no_price": 50, "taker_side": "yes",
+                 "created_time": "2026-01-01T00:00:00Z"}
+                for i in range(200)
+            ],
+            "cursor": "abc",
+        }
+        page2 = {
+            "trades": [
+                {"trade_id": "t-last", "ticker": "X", "count": 1,
+                 "yes_price": 50, "no_price": 50, "taker_side": "yes",
+                 "created_time": "2026-01-02T00:00:00Z"}
+            ],
+            "cursor": None,
+        }
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return httpx.Response(200, json=page1 if calls["n"] == 1 else page2)
+
+        client._http = httpx.Client(
+            transport=httpx.MockTransport(handler), base_url="http://t"
+        )
+        monkeypatch.setattr(
+            "prospector.kalshi.client.time.sleep", lambda _x: None
+        )
+        trades = list(client.iter_trades(ticker="X"))
+        assert len(trades) == 201
+        assert trades[-1].trade_id == "t-last"
+        assert calls["n"] == 2
+
+    def test_respects_min_max_ts_in_url(self, client, monkeypatch):
+        seen_urls = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen_urls.append(str(request.url))
+            return httpx.Response(200, json={"trades": [], "cursor": None})
+
+        client._http = httpx.Client(
+            transport=httpx.MockTransport(handler), base_url="http://t"
+        )
+        monkeypatch.setattr(
+            "prospector.kalshi.client.time.sleep", lambda _x: None
+        )
+        list(client.iter_trades(ticker="X", min_ts=1000, max_ts=2000))
+        assert any("min_ts=1000" in u for u in seen_urls)
+        assert any("max_ts=2000" in u for u in seen_urls)
+
+
+class TestIterEventsSeriesFilter:
+    def test_series_ticker_query_param(self, client, monkeypatch):
+        seen_urls = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen_urls.append(str(request.url))
+            return httpx.Response(200, json={"events": [], "cursor": None})
+
+        client._http = httpx.Client(
+            transport=httpx.MockTransport(handler), base_url="http://t"
+        )
+        monkeypatch.setattr(
+            "prospector.kalshi.client.time.sleep", lambda _x: None
+        )
+        list(client.iter_events(status="settled", series_ticker="KXBTC"))
+        assert any("series_ticker=KXBTC" in u for u in seen_urls)
+        assert any("status=settled" in u for u in seen_urls)

@@ -87,3 +87,20 @@ class Position:
     average_price: float | None
     market_exposure: float
     realized_pnl: float
+
+
+@dataclass(frozen=True)
+class Trade:
+    """A single executed trade on a Kalshi market.
+
+    Prices are floats in [0, 1]. `taker_side` is the side (yes/no) that took
+    liquidity. Matches the schema shape of Kalshi's `/markets/trades` response
+    normalized to our canonical form (floats not cents; UTC datetimes)."""
+
+    trade_id: str
+    ticker: str
+    count: int
+    yes_price: float
+    no_price: float
+    taker_side: str
+    created_time: datetime

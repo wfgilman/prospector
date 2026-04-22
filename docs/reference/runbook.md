@@ -174,6 +174,15 @@ streamlit run scripts/dashboard.py
 Set `PROSPECTOR_MANIFEST=<path>` to point at an alternate manifest (useful for
 smoke-testing against a copy of a DB before cutover).
 
+Layout (kalshi_binary renderer): hero NAV card → KPI tiles (realized P&L,
+locked risk, open, trades today) → NAV trajectory → **per-category sections**
+(sports / crypto / politics / …) each showing a subtotal strip (open count,
+locked risk, upside, avg edge, resolved W/L, realized P&L) above that
+category's open positions → price-bin concentration chart → recent ticks
+table. Theme (dark "quant terminal" — Fraunces display + JetBrains Mono
+numbers + phosphor-green accent) lives in `.streamlit/config.toml` plus the
+`inject_theme()` CSS block in `prospector.dashboard`.
+
 ---
 
 ## Elder-Track Scripts (Paused)

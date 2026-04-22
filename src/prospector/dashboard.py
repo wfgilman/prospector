@@ -1,12 +1,14 @@
 """Streamlit dashboard helpers.
 
 Split out from ``scripts/dashboard.py`` so the Streamlit script stays thin
-and the render logic stays unit-testable. The module has two layers:
+and the render logic stays unit-testable. The module has three layers:
 
 1. *Loaders* — pure functions that read a strategy's portfolio DB or log
    directory and return dataclasses / dataframes. No Streamlit imports, so
    these can be exercised from tests and notebooks.
-2. *Renderers* — schema-dispatched Streamlit views. One renderer per
+2. *Theme* — CSS + Altair config that commits the dashboard to a
+   "quant-terminal" aesthetic (dark charcoal, serif display, mono numbers).
+3. *Renderers* — schema-dispatched Streamlit views. One renderer per
    position schema (``kalshi_binary`` today; add a new renderer when a new
    schema ships).
 """
@@ -33,9 +35,6 @@ _TICK_RE = re.compile(
     r"candidates=(?P<candidates>\d+) "
     r"resolved=(?P<resolved>\d+) voided=(?P<voided>\d+)\s*$"
 )
-# Preceding log line format: ``YYYY-MM-DD HH:MM:SS,mmm LEVEL logger msg``.
-# We read it off the line *before* the tick summary so each tick gets its
-# wall-clock timestamp without relying on file mtime.
 _LOG_TS_RE = re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s")
 
 
@@ -50,11 +49,7 @@ class TickSummary:
 
 
 def load_tick_history(log_dir: Path, limit: int = 50) -> list[TickSummary]:
-    """Parse the last `limit` tick summaries across today's + yesterday's logs.
-
-    Logs rotate daily (UTC) via the launchd wrapper, so two files are
-    usually enough to cover recent activity without unbounded scanning.
-    """
+    """Parse the last `limit` tick summaries across today's + yesterday's logs."""
     if not log_dir.exists():
         return []
     files = sorted(log_dir.glob("paper_trade-*.log"))[-2:]
@@ -139,11 +134,7 @@ def load_portfolio_summary(db_path: Path) -> PortfolioSummary | None:
 
 
 def load_positions(db_path: Path, status: str | None = None) -> pd.DataFrame:
-    """Return positions as a DataFrame, optionally filtered by status.
-
-    Empty DataFrame if the DB is missing — callers can render a placeholder
-    without special-casing.
-    """
+    """Return positions as a DataFrame, optionally filtered by status."""
     if not db_path.exists():
         return pd.DataFrame()
     query = "SELECT * FROM positions"
@@ -161,13 +152,54 @@ def load_positions(db_path: Path, status: str | None = None) -> pd.DataFrame:
     return df
 
 
-def build_nav_series(db_path: Path) -> pd.DataFrame:
-    """NAV trajectory derived from resolved positions + initial NAV.
+def load_category_breakdown(db_path: Path) -> pd.DataFrame:
+    """Per-category aggregates across open + closed positions.
 
-    We could read from `daily_snapshots`, but snapshots aren't yet populated
-    by the runner. Using resolved positions gives a continuous curve the
-    moment the first trade resolves.
+    Columns:
+        category, open_count, locked_risk, upside, avg_edge_pp,
+        closed_count, wins, losses, realized_pnl, voided_count.
+
+    Upside = sum of `reward_potential` on open positions (what the book
+    gains if every open position wins). Realized P&L is only for *closed*
+    positions (voids contribute 0). Empty result => empty DataFrame.
     """
+    if not db_path.exists():
+        return pd.DataFrame()
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        df = pd.read_sql_query(
+            """
+            SELECT
+                category,
+                SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open_count,
+                COALESCE(
+                    SUM(CASE WHEN status = 'open' THEN risk_budget END), 0
+                ) AS locked_risk,
+                COALESCE(
+                    SUM(CASE WHEN status = 'open' THEN reward_potential END), 0
+                ) AS upside,
+                AVG(CASE WHEN status = 'open' THEN edge_pp END) AS avg_edge_pp,
+                SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) AS closed_count,
+                SUM(
+                    CASE WHEN status = 'closed' AND realized_pnl > 0 THEN 1 ELSE 0 END
+                ) AS wins,
+                SUM(
+                    CASE WHEN status = 'closed' AND realized_pnl <= 0 THEN 1 ELSE 0 END
+                ) AS losses,
+                COALESCE(
+                    SUM(CASE WHEN status = 'closed' THEN realized_pnl END), 0
+                ) AS realized_pnl,
+                SUM(CASE WHEN status = 'voided' THEN 1 ELSE 0 END) AS voided_count
+            FROM positions
+            GROUP BY category
+            ORDER BY locked_risk DESC
+            """,
+            conn,
+        )
+    return df
+
+
+def build_nav_series(db_path: Path) -> pd.DataFrame:
+    """NAV trajectory derived from resolved positions + initial NAV."""
     if not db_path.exists():
         return pd.DataFrame(columns=["time", "nav"])
     with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
@@ -182,13 +214,313 @@ def build_nav_series(db_path: Path) -> pd.DataFrame:
             conn,
         )
     if closed.empty:
-        # Anchor the chart at initial NAV so it renders something on fresh books.
         return pd.DataFrame(
             [{"time": datetime.now(timezone.utc), "nav": initial_nav}]
         )
     closed["close_time"] = pd.to_datetime(closed["close_time"], utc=True)
     closed["nav"] = initial_nav + closed["realized_pnl"].cumsum()
     return closed.rename(columns={"close_time": "time"})[["time", "nav"]]
+
+
+# -- theme ------------------------------------------------------------------
+
+# Single accent palette referenced from both CSS and Altair. Keep these in
+# one place so retheming is a three-line change.
+_PALETTE = {
+    "bg": "#0C0E13",
+    "surface": "#151821",
+    "surface_raised": "#1C2030",
+    "border": "#2A2F40",
+    "text": "#E8E6DB",
+    "text_dim": "#8A8FA3",
+    "accent": "#7CE495",   # phosphor green — positives, live state
+    "warn": "#F5B841",      # amber — cap proximity, attention
+    "loss": "#F87171",      # dusty red — losses, rejections
+}
+
+_THEME_CSS = f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400&family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {{
+    --qt-bg: {_PALETTE["bg"]};
+    --qt-surface: {_PALETTE["surface"]};
+    --qt-surface-raised: {_PALETTE["surface_raised"]};
+    --qt-border: {_PALETTE["border"]};
+    --qt-text: {_PALETTE["text"]};
+    --qt-text-dim: {_PALETTE["text_dim"]};
+    --qt-accent: {_PALETTE["accent"]};
+    --qt-warn: {_PALETTE["warn"]};
+    --qt-loss: {_PALETTE["loss"]};
+}}
+
+html, body, [class*="st-"], .stApp, .stMarkdown, button, input, textarea {{
+    font-family: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--qt-text);
+}}
+
+.stApp {{
+    background:
+        radial-gradient(circle at 10% -10%, rgba(124, 228, 149, 0.05), transparent 50%),
+        radial-gradient(circle at 90% 110%, rgba(124, 228, 149, 0.03), transparent 50%),
+        var(--qt-bg);
+}}
+
+/* Section headers — editorial serif with optical sizing */
+.qt-eyebrow {{
+    font-family: 'Geist', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--qt-text-dim);
+    margin: 0;
+}}
+.qt-display {{
+    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-variation-settings: 'opsz' 96, 'wght' 400;
+    font-size: clamp(2.4rem, 5vw, 3.4rem);
+    line-height: 1;
+    letter-spacing: -0.02em;
+    color: var(--qt-text);
+    margin: 0.25rem 0 0.5rem 0;
+}}
+.qt-display-sm {{
+    font-family: 'Fraunces', serif;
+    font-variation-settings: 'opsz' 48, 'wght' 500;
+    font-size: 1.35rem;
+    letter-spacing: -0.01em;
+    color: var(--qt-text);
+    margin: 0;
+}}
+
+/* Numbers — tabular mono, everywhere */
+.qt-mono, .qt-num {{
+    font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1, "zero" 1;
+}}
+
+/* Hero card */
+.qt-hero {{
+    background: linear-gradient(180deg, var(--qt-surface) 0%, var(--qt-bg) 100%);
+    border: 1px solid var(--qt-border);
+    border-radius: 4px;
+    padding: 1.5rem 1.75rem;
+    position: relative;
+    overflow: hidden;
+}}
+.qt-hero::before {{
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(
+        90deg, transparent, var(--qt-accent) 50%, transparent
+    );
+    opacity: 0.5;
+}}
+.qt-hero-nav {{
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 3.2rem;
+    font-weight: 500;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    color: var(--qt-text);
+}}
+.qt-hero-delta {{
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 1rem;
+    font-weight: 500;
+    letter-spacing: 0;
+    margin-top: 0.5rem;
+}}
+.qt-hero-delta.up {{ color: var(--qt-accent); }}
+.qt-hero-delta.down {{ color: var(--qt-loss); }}
+.qt-hero-delta.flat {{ color: var(--qt-text-dim); }}
+
+/* KPI tiles */
+.qt-kpi {{
+    background: var(--qt-surface);
+    border: 1px solid var(--qt-border);
+    border-radius: 4px;
+    padding: 0.9rem 1.1rem;
+    height: 100%;
+}}
+.qt-kpi-label {{
+    font-size: 0.65rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--qt-text-dim);
+    margin-bottom: 0.4rem;
+}}
+.qt-kpi-value {{
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 1.4rem;
+    font-weight: 500;
+    color: var(--qt-text);
+    line-height: 1.1;
+}}
+.qt-kpi-sub {{
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.75rem;
+    color: var(--qt-text-dim);
+    margin-top: 0.25rem;
+}}
+
+/* Category panels */
+.qt-cat {{
+    border: 1px solid var(--qt-border);
+    border-radius: 4px;
+    background: var(--qt-surface);
+    margin-bottom: 1.25rem;
+    overflow: hidden;
+}}
+.qt-cat-head {{
+    padding: 1rem 1.25rem;
+    display: flex;
+    align-items: baseline;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--qt-border);
+    background: var(--qt-surface-raised);
+}}
+.qt-cat-name {{
+    font-family: 'Fraunces', serif;
+    font-variation-settings: 'opsz' 48, 'wght' 600;
+    font-size: 1.3rem;
+    color: var(--qt-text);
+    letter-spacing: -0.01em;
+}}
+.qt-cat-stat {{
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}}
+.qt-cat-stat-label {{
+    font-size: 0.6rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--qt-text-dim);
+}}
+.qt-cat-stat-value {{
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.95rem;
+    color: var(--qt-text);
+}}
+.qt-cat-stat-value.up {{ color: var(--qt-accent); }}
+.qt-cat-stat-value.down {{ color: var(--qt-loss); }}
+.qt-cat-stat-value.flat {{ color: var(--qt-text-dim); }}
+
+/* Scrubbed dataframe edges to match card borders */
+[data-testid="stDataFrame"] {{
+    border: 1px solid var(--qt-border);
+    border-radius: 4px;
+    overflow: hidden;
+}}
+[data-testid="stDataFrame"] * {{
+    font-family: 'JetBrains Mono', monospace !important;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.82rem;
+}}
+
+/* Tighter default spacing; this is a monitoring tool, not a marketing page */
+.block-container {{
+    padding-top: 2rem;
+    padding-bottom: 3rem;
+    max-width: 1400px;
+}}
+hr {{
+    border-color: var(--qt-border);
+    margin: 2rem 0;
+}}
+
+/* Streamlit metric — fall back where we still use it */
+[data-testid="stMetric"] {{
+    background: var(--qt-surface);
+    border: 1px solid var(--qt-border);
+    border-radius: 4px;
+    padding: 0.75rem 1rem;
+}}
+[data-testid="stMetricLabel"] p {{
+    font-size: 0.65rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--qt-text-dim);
+}}
+[data-testid="stMetricValue"] {{
+    font-family: 'JetBrains Mono', monospace !important;
+    font-variant-numeric: tabular-nums;
+    color: var(--qt-text);
+}}
+</style>
+"""
+
+
+def _altair_theme() -> dict:
+    """Return an Altair theme dict matching the page palette."""
+    return {
+        "config": {
+            "background": _PALETTE["surface"],
+            "view": {"stroke": "transparent"},
+            "axis": {
+                "domainColor": _PALETTE["border"],
+                "gridColor": _PALETTE["border"],
+                "gridOpacity": 0.4,
+                "tickColor": _PALETTE["border"],
+                "labelColor": _PALETTE["text_dim"],
+                "labelFont": "JetBrains Mono",
+                "labelFontSize": 10,
+                "titleColor": _PALETTE["text_dim"],
+                "titleFont": "Geist",
+                "titleFontWeight": 500,
+                "titleFontSize": 10,
+            },
+            "legend": {
+                "labelColor": _PALETTE["text_dim"],
+                "titleColor": _PALETTE["text_dim"],
+                "labelFont": "Geist",
+                "titleFont": "Geist",
+            },
+            "title": {
+                "color": _PALETTE["text"],
+                "font": "Fraunces",
+                "fontSize": 14,
+                "fontWeight": 500,
+                "anchor": "start",
+            },
+            "range": {
+                "category": [
+                    _PALETTE["accent"],
+                    _PALETTE["warn"],
+                    _PALETTE["loss"],
+                    "#8B9AD6",
+                    "#C77DFF",
+                ],
+            },
+        }
+    }
+
+
+def inject_theme() -> None:
+    """Write the CSS block once per Streamlit rerun.
+
+    Streamlit reruns the whole script top-to-bottom on every interaction,
+    so calling this from each render is fine — browsers dedupe the
+    Google Fonts request.
+
+    Public because the entry script (``scripts/dashboard.py``) has to
+    call it once per rerun before any markup is emitted; the renderer
+    helpers below assume the stylesheet is already on the page.
+    """
+    import streamlit as st
+
+    st.markdown(_THEME_CSS, unsafe_allow_html=True)
 
 
 # -- renderers --------------------------------------------------------------
@@ -211,101 +543,340 @@ def _render_kalshi_binary(entry: StrategyEntry) -> None:
     import altair as alt
     import streamlit as st
 
-    st.subheader(entry.display_name)
+    alt.themes.register("quant_terminal", _altair_theme)
+    alt.themes.enable("quant_terminal")
 
     summary = load_portfolio_summary(entry.portfolio_db)
     if summary is None:
         st.info(f"Portfolio DB not found at {entry.portfolio_db}.")
         return
 
-    roi = (summary.nav - summary.initial_nav) / summary.initial_nav * 100
-    cols = st.columns(6)
-    cols[0].metric("NAV", f"${summary.nav:,.2f}", f"{roi:+.2f}%")
-    cols[1].metric("Realized P&L", f"${summary.realized_pnl:,.2f}")
-    cols[2].metric("Locked risk", f"${summary.locked_risk:,.2f}")
-    cols[3].metric("Cash", f"${summary.cash:,.2f}")
-    cols[4].metric("Open positions", summary.open_positions)
-    cols[5].metric("Trades today", summary.trades_today)
+    _render_hero(entry, summary)
+    _render_kpis(summary)
+    _render_nav(entry.portfolio_db)
+    _render_category_sections(entry.portfolio_db)
+    _render_concentration(entry.portfolio_db, summary)
+    _render_tick_stream(entry.log_dir)
 
-    nav_df = build_nav_series(entry.portfolio_db)
+
+def _render_hero(entry: StrategyEntry, summary: PortfolioSummary) -> None:
+    import streamlit as st
+
+    delta = summary.nav - summary.initial_nav
+    roi = delta / summary.initial_nav * 100 if summary.initial_nav else 0.0
+    direction = "up" if delta > 0 else ("down" if delta < 0 else "flat")
+    arrow = "▲" if direction == "up" else ("▼" if direction == "down" else "◆")
+
+    st.markdown(
+        f"""
+        <div class="qt-hero">
+            <div class="qt-eyebrow">{entry.display_name}</div>
+            <div class="qt-display">Portfolio</div>
+            <div style="display:flex; align-items:baseline; gap:2rem; flex-wrap:wrap;">
+                <div>
+                    <div class="qt-kpi-label">Net Asset Value</div>
+                    <div class="qt-hero-nav">${summary.nav:,.2f}</div>
+                    <div class="qt-hero-delta {direction}">
+                        {arrow} {delta:+,.2f} &nbsp;·&nbsp; {roi:+.3f}%
+                    </div>
+                </div>
+                <div>
+                    <div class="qt-kpi-label">Seed Capital</div>
+                    <div class="qt-mono" style="font-size:1.1rem; color:var(--qt-text-dim);">
+                        ${summary.initial_nav:,.0f}
+                    </div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_kpis(summary: PortfolioSummary) -> None:
+    import streamlit as st
+
+    realized_cls = (
+        "up" if summary.realized_pnl > 0
+        else ("down" if summary.realized_pnl < 0 else "flat")
+    )
+    locked_pct = (
+        summary.locked_risk / summary.nav * 100 if summary.nav else 0.0
+    )
+
+    kpis = [
+        (
+            "Realized P&L",
+            f"${summary.realized_pnl:+,.2f}",
+            realized_cls,
+            None,
+        ),
+        (
+            "Locked Risk",
+            f"${summary.locked_risk:,.2f}",
+            "flat",
+            f"{locked_pct:.2f}% of NAV",
+        ),
+        (
+            "Open Positions",
+            f"{summary.open_positions}",
+            "flat",
+            None,
+        ),
+        (
+            "Trades Today",
+            f"{summary.trades_today}",
+            "flat",
+            None,
+        ),
+    ]
+
+    cols = st.columns(len(kpis), gap="small")
+    for col, (label, value, cls, sub) in zip(cols, kpis):
+        sub_html = (
+            f'<div class="qt-kpi-sub">{sub}</div>' if sub else ""
+        )
+        col.markdown(
+            f"""
+            <div class="qt-kpi">
+                <div class="qt-kpi-label">{label}</div>
+                <div class="qt-kpi-value {cls}">{value}</div>
+                {sub_html}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def _render_nav(db_path: Path) -> None:
+    import altair as alt
+    import streamlit as st
+
+    nav_df = build_nav_series(db_path)
+    st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="qt-eyebrow">NAV trajectory</div>',
+        unsafe_allow_html=True,
+    )
     if len(nav_df) >= 2:
-        chart = (
+        line = (
             alt.Chart(nav_df)
-            .mark_line()
-            .encode(x="time:T", y=alt.Y("nav:Q", title="NAV ($)"))
-            .properties(height=200)
-        )
-        st.altair_chart(chart, width="stretch")
-    else:
-        st.caption("NAV trajectory renders once the first trade resolves.")
-
-    open_df = load_positions(entry.portfolio_db, status="open")
-    if not open_df.empty:
-        display_cols = [
-            "ticker",
-            "event_ticker",
-            "category",
-            "side",
-            "entry_price",
-            "edge_pp",
-            "risk_budget",
-            "reward_potential",
-            "contracts",
-            "entry_time",
-        ]
-        st.markdown("**Open positions**")
-        st.dataframe(
-            open_df[display_cols].style.format(
-                {
-                    "entry_price": "{:.3f}",
-                    "edge_pp": "{:+.1f}",
-                    "risk_budget": "${:.2f}",
-                    "reward_potential": "${:.2f}",
-                }
-            ),
-            width="stretch",
-            hide_index=True,
-        )
-
-        conc_df = open_df.copy()
-        conc_df["bin_low"] = (conc_df["entry_price"] * 100 // 5 * 5).astype(int)
-        by_bin = (
-            conc_df.groupby(["side", "bin_low"], as_index=False)["risk_budget"]
-            .sum()
-            .rename(columns={"risk_budget": "risk"})
-        )
-        bin_cap = summary.nav * 0.15
-        conc_chart = (
-            alt.Chart(by_bin)
-            .mark_bar()
-            .encode(
-                x=alt.X("bin_low:O", title="5¢ bin (low)"),
-                y=alt.Y("risk:Q", title="Locked risk ($)"),
-                color="side:N",
-                tooltip=["side", "bin_low", "risk"],
+            .mark_line(
+                color=_PALETTE["accent"], strokeWidth=1.75, interpolate="monotone"
             )
-            .properties(height=200, title=f"Bin concentration (cap ≈ ${bin_cap:,.0f})")
+            .encode(
+                x=alt.X("time:T", title=None),
+                y=alt.Y("nav:Q", title="NAV ($)", scale=alt.Scale(zero=False)),
+            )
         )
-        st.altair_chart(conc_chart, width="stretch")
+        area = (
+            alt.Chart(nav_df)
+            .mark_area(
+                opacity=0.15, color=_PALETTE["accent"], interpolate="monotone"
+            )
+            .encode(x="time:T", y=alt.Y("nav:Q", scale=alt.Scale(zero=False)))
+        )
+        st.altair_chart((area + line).properties(height=180), width="stretch")
     else:
-        st.caption("No open positions.")
+        st.caption("Trajectory will render after the first resolution.")
 
-    st.markdown("**Recent ticks**")
-    ticks = load_tick_history(entry.log_dir, limit=20)
-    if ticks:
-        tick_df = pd.DataFrame(
-            [
-                {
-                    "time": t.timestamp,
-                    "entered": t.entered,
-                    "rejected": t.rejected,
-                    "candidates": t.candidates,
-                    "resolved": t.resolved,
-                    "voided": t.voided,
-                }
-                for t in ticks[::-1]
-            ]
+
+def _render_category_sections(db_path: Path) -> None:
+    import streamlit as st
+
+    st.markdown("<div style='height:2rem;'></div>", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="qt-eyebrow">Open positions by category</div>',
+        unsafe_allow_html=True,
+    )
+
+    breakdown = load_category_breakdown(db_path)
+    open_df = load_positions(db_path, status="open")
+    if breakdown.empty or open_df.empty:
+        st.caption("No open positions.")
+        return
+
+    for _, row in breakdown.iterrows():
+        if row["open_count"] == 0 and row["closed_count"] == 0:
+            continue
+        _render_category_block(row, open_df)
+
+
+def _render_category_block(row: pd.Series, open_df: pd.DataFrame) -> None:
+    import streamlit as st
+
+    cat = row["category"]
+    pnl = float(row["realized_pnl"])
+    pnl_cls = "up" if pnl > 0 else ("down" if pnl < 0 else "flat")
+    wins, losses = int(row["wins"]), int(row["losses"])
+    record = f"{wins}W / {losses}L" if (wins + losses) > 0 else "—"
+    avg_edge = row["avg_edge_pp"]
+    avg_edge_str = (
+        f"+{avg_edge:.2f}pp" if pd.notna(avg_edge) else "—"
+    )
+
+    st.markdown(
+        f"""
+        <div class="qt-cat">
+            <div class="qt-cat-head">
+                <div class="qt-cat-name">{cat.upper()}</div>
+                <div class="qt-cat-stat">
+                    <div class="qt-cat-stat-label">Open</div>
+                    <div class="qt-cat-stat-value">{int(row["open_count"])}</div>
+                </div>
+                <div class="qt-cat-stat">
+                    <div class="qt-cat-stat-label">Locked Risk</div>
+                    <div class="qt-cat-stat-value">${row["locked_risk"]:,.2f}</div>
+                </div>
+                <div class="qt-cat-stat">
+                    <div class="qt-cat-stat-label">Upside</div>
+                    <div class="qt-cat-stat-value up">${row["upside"]:,.2f}</div>
+                </div>
+                <div class="qt-cat-stat">
+                    <div class="qt-cat-stat-label">Avg Edge</div>
+                    <div class="qt-cat-stat-value">{avg_edge_str}</div>
+                </div>
+                <div class="qt-cat-stat">
+                    <div class="qt-cat-stat-label">Resolved</div>
+                    <div class="qt-cat-stat-value">{record}</div>
+                </div>
+                <div class="qt-cat-stat">
+                    <div class="qt-cat-stat-label">Realized P&amp;L</div>
+                    <div class="qt-cat-stat-value {pnl_cls}">${pnl:+,.2f}</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    cat_positions = open_df[open_df["category"] == cat]
+    if cat_positions.empty:
+        st.caption(
+            f"No open positions in {cat}. "
+            "(Resolved history shown above.)"
         )
-        st.dataframe(tick_df, width="stretch", hide_index=True)
-    else:
-        st.caption(f"No tick log entries found under {entry.log_dir}.")
+        return
+
+    display_cols = [
+        "ticker",
+        "event_ticker",
+        "side",
+        "entry_price",
+        "edge_pp",
+        "risk_budget",
+        "reward_potential",
+        "contracts",
+        "entry_time",
+    ]
+    display_df = cat_positions[display_cols].copy()
+    display_df["entry_time"] = display_df["entry_time"].dt.strftime("%m-%d %H:%M")
+    st.dataframe(
+        display_df.style.format(
+            {
+                "entry_price": "{:.3f}",
+                "edge_pp": "{:+.1f}",
+                "risk_budget": "${:.2f}",
+                "reward_potential": "${:.2f}",
+            }
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+
+
+def _render_concentration(db_path: Path, summary: PortfolioSummary) -> None:
+    import altair as alt
+    import streamlit as st
+
+    open_df = load_positions(db_path, status="open")
+    if open_df.empty:
+        return
+
+    st.markdown("<div style='height:2rem;'></div>", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="qt-eyebrow">Price-bin concentration</div>',
+        unsafe_allow_html=True,
+    )
+
+    conc_df = open_df.copy()
+    conc_df["bin_low"] = (conc_df["entry_price"] * 100 // 5 * 5).astype(int)
+    conc_df["bin_label"] = conc_df["bin_low"].apply(
+        lambda c: f"{c}–{c + 5}¢"
+    )
+    by_bin = (
+        conc_df.groupby(["bin_label", "bin_low", "side"], as_index=False)[
+            "risk_budget"
+        ]
+        .sum()
+        .rename(columns={"risk_budget": "risk"})
+    )
+    bin_cap = summary.nav * 0.15
+
+    chart = (
+        alt.Chart(by_bin)
+        .mark_bar(cornerRadiusEnd=2)
+        .encode(
+            x=alt.X(
+                "bin_label:N",
+                title="Entry-price bin",
+                sort=alt.SortField("bin_low"),
+            ),
+            y=alt.Y("risk:Q", title="Locked risk ($)"),
+            color=alt.Color(
+                "side:N",
+                scale=alt.Scale(
+                    domain=["sell_yes", "buy_yes"],
+                    range=[_PALETTE["accent"], _PALETTE["warn"]],
+                ),
+                legend=alt.Legend(orient="top", title=None),
+            ),
+            tooltip=[
+                alt.Tooltip("bin_label:N", title="bin"),
+                alt.Tooltip("side:N"),
+                alt.Tooltip("risk:Q", format="$,.2f"),
+            ],
+        )
+        .properties(
+            height=200,
+            title=alt.TitleParams(
+                text=f"per-bin cap ≈ ${bin_cap:,.0f}",
+                fontSize=10,
+                color=_PALETTE["text_dim"],
+                font="Geist",
+            ),
+        )
+    )
+    st.altair_chart(chart, width="stretch")
+
+
+def _render_tick_stream(log_dir: Path) -> None:
+    import streamlit as st
+
+    st.markdown("<div style='height:2rem;'></div>", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="qt-eyebrow">Recent ticks</div>',
+        unsafe_allow_html=True,
+    )
+    ticks = load_tick_history(log_dir, limit=20)
+    if not ticks:
+        st.caption(f"No tick log entries under {log_dir}.")
+        return
+    tick_df = pd.DataFrame(
+        [
+            {
+                "time": (
+                    t.timestamp.strftime("%m-%d %H:%M UTC")
+                    if t.timestamp
+                    else "—"
+                ),
+                "candidates": t.candidates,
+                "entered": t.entered,
+                "rejected": t.rejected,
+                "resolved": t.resolved,
+                "voided": t.voided,
+            }
+            for t in ticks[::-1]
+        ]
+    )
+    st.dataframe(tick_df, width="stretch", hide_index=True)

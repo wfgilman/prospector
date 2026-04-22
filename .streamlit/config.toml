@@ -1,0 +1,19 @@
+# Dashboard theme — "quant terminal".
+#
+# Streamlit applies these before our CSS overrides, so widget chrome
+# (buttons, selectors, sidebar) picks up the palette automatically.
+# Our injected CSS then refines typography + custom panels.
+
+[theme]
+base = "dark"
+primaryColor = "#7CE495"        # phosphor green — accent for positives
+backgroundColor = "#0C0E13"     # near-black charcoal, not pure black
+secondaryBackgroundColor = "#151821"
+textColor = "#E8E6DB"           # warm off-white
+font = "sans serif"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false

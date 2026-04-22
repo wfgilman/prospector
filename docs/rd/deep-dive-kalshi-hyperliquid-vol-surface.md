@@ -387,3 +387,43 @@ Each reformulation is itself a new pre-registration exercise — no free paramet
 - `data/vol_surface/perp_implied.parquet` (131,637 rows)
 - `data/vol_surface/divergence_panel.parquet` (4,629 rows, one per snapshot)
 - `data/vol_surface/week1_decision.txt` (auditable decision log)
+
+---
+
+## 13. Investigation plan (post-Week-1) — 2026-04-22
+
+**Decision (2026-04-22):** Do not pivot to #4 yet. The 0.37 real/null gap ratio is a blinking light that real cross-market information exists; the convergence form was the wrong instrument to measure it. Priority: exhaust the possibility that a systematic cross-market exploit exists before moving on. Time is the friend here — the PM Underwriting paper book generates return data in parallel and isn't blocked by this work.
+
+### 13.1 Three-phase plan
+
+**Phase 1 — Diagnostic on existing HF data (~3–5 days).** Four pure measurements on the current panel (no new hyperparameters, no optimization). Each is a falsifier for a specific reason the Week-1 test may have mis-measured a real signal:
+
+| # | Diagnostic | What it tests | Falsifies |
+|---|---|---|---|
+| D1 | Per-bucket-position signed gap | Gap indexed by `(strike_mid − spot) / bucket_width` at each snapshot; look for a consistent sign by relative position | "Gap is a structural wedge" (tradeable post-calibration) vs. "random per-event noise" |
+| D2 | Terminal-convergence isolation | Mean |gap| and KL-divergence as a function of fraction-of-event-life-elapsed | "Gaps converge mechanically but only in the last N% of life" — averaged regression masked it |
+| D3 | Empirical-bootstrap reference | Replace lognormal `q_i` with `q'_i` drawn from rolling 25h BTC return history; recompute all gaps | "Lognormal reference family is wrong; signal is there with the right shape" |
+| D4 | Moderate-volume universe | Re-run the pipeline on events with `n_trades ∈ [100, 500)` — the ones excluded by the current filter | "Edge lives in mid-volume events where Kalshi is thin enough to carry mispricings" |
+
+**Gate at end of Phase 1:** if any diagnostic points to real exploitable structure, proceed to Phase 2 (data pipeline). If all four definitively kill the thesis, pivot to #4 and Phase 2 becomes a separate infrastructure project rather than a #10 blocker.
+
+**Phase 2 — In-house data pipeline (~1–2 weeks, blocking).** Build Kalshi + Hyperliquid native ingest so Phase 3 runs on data we own end-to-end. Scope, design, and rationale in [`docs/implementation/data-pipeline.md`](../implementation/data-pipeline.md). Blocking dependency for Phase 3 re-validation — quantitative conclusions require clean, known-provenance data.
+
+**Phase 3 — Re-validate on fresh + cleaner data (~1 week).** Re-run Phase 1 diagnostics and the original Week-1 spike on in-house data extended through April 2026 (~3 months more than HF). If Phase 1 findings replicate, we have a real signal on clean data and can scope the reformulated prototype. If they don't replicate, we've learned the HF data had a subtle issue and avoided a worse outcome.
+
+### 13.2 Decision gates
+
+- After Phase 1: continue ↔ pivot to #4.
+- After Phase 2: in-house data validated against TrevorJS HF on overlap window (≤ random-trade-ordering noise) ↔ investigate data-quality discrepancy.
+- After Phase 3: Phase 1 findings replicate ↔ they don't; if they don't, one more round of diagnostic work or pivot.
+
+### 13.3 What's explicitly *not* in Phase 1
+
+- No new hyperparameter sweeps.
+- No prototype execution code.
+- No new LLM classifier — the LLM's role was specified in §3.3 and isn't relevant until we have a tradeable signal.
+- No attempt to tune existing Week-1 hyperparameters to "rescue" the result — if the thesis needs reformulation, that's a new pre-registration exercise, not a retrofit.
+
+### 13.4 Methodology discipline for Phase 1
+
+Same discipline as §5.0 carries: each diagnostic has a pre-registered output format and a pre-committed interpretation rule. The four diagnostics run on the full post-completeness-filter panel (both train and test — we already know the test-fold result under the original measurement, so the added risk from using both folds for descriptive statistics is small). Findings get written up in §14 before any further action. No cherry-picking by slicing the fold or the universe after seeing results.

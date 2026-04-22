@@ -332,3 +332,5 @@ With PM Underwriting (#9) now in Phase 3 paper trading, #10 (Cross-market implie
 Deep-dive: [`deep-dive-kalshi-hyperliquid-vol-surface.md`](deep-dive-kalshi-hyperliquid-vol-surface.md).
 
 Fallback if #10 fails the Week-1 spike: #4 (Kalshi ↔ crypto narrative spread) — deep-dive already written, 1-week FOMC event study ready to run.
+
+**Update (2026-04-22):** Week-1 spike failed the pre-registered convergence criterion, but the real/null gap ratio of 0.37 indicates real cross-market information the specific formulation didn't capture. Decision: *not* pivoting to #4 yet. Entering a three-phase investigation (diagnostic → in-house data pipeline → re-validate on clean data) to exhaust the systematic-exploit possibility. See [`deep-dive-kalshi-hyperliquid-vol-surface.md`](deep-dive-kalshi-hyperliquid-vol-surface.md) §13 for the plan and [`../implementation/data-pipeline.md`](../implementation/data-pipeline.md) for the now-core-competency data infrastructure scope.

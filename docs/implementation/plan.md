@@ -32,6 +32,7 @@ For the paused Elder-template parameter-search track, see [`docs/implementation/
 | 3 | Paper trading | **In progress** | Live via launchd since 2026-04-20; relaunched 2026-04-21 on equal-σ sizing (§3.5). |
 | 3.5 | Sizing-framework reevaluation | **Complete (2026-04-21)** | Equal-σ + σ-table shipped. Kelly retired. Per-bin cap replaces category cap. Full log: [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md). |
 | 4 | Live (small) | Pending | 5% of intended NAV after Phase 3 results + sizing decision. |
+| 5 | **Hedging overlay (optional)** | **Scoped 2026-04-22** | Delta-hedge the crypto slice via Hyperliquid perps; preserves optionality without committing capital now. See §Phase 5 below. |
 
 ---
 
@@ -158,3 +159,77 @@ Full decision log and math: [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reev
 ## Phase 4 — Live (Small)
 
 Deploy at 5% of intended NAV after Phase 3 results + sizing decision. Reuse paper trading infrastructure with real order submission. Details TBD.
+
+---
+
+## Phase 5 — Hedging Overlay (Optional, Scoped 2026-04-22)
+
+Memorializes a finding from the #10 (Kalshi × Hyperliquid vol-surface) R&D track that bears directly on the PM book. Kept optional — documented so the optionality is available without committing engineering time until Phase 4 (Live) produces data that motivates the enhancement.
+
+### 5.1 Trigger
+
+From `docs/rd/deep-dive-kalshi-hyperliquid-vol-surface.md` §14 (Phase 1 diagnostic D1):
+
+> Kalshi under-prices ATM BTC range buckets by ~10pp and over-prices far-OTM buckets by ~16.8pp vs. both the lognormal reference and an empirical-bootstrap from BTC's own 25h return distribution. The wedge is real (t-stat 17–50, n=4,601 and 901), persistent, and structural — the favorite-longshot bias documented in sports betting and horse racing, now measured in Kalshi crypto contracts.
+
+This is the same edge PM already exploits (Phase 1 crypto-longshot calibration). The new information: because the underlying is BTC/ETH, positions are delta-hedgeable via Hyperliquid perps in a way sports parlays are not.
+
+### 5.2 Scope
+
+**Applies to:** The crypto slice of PM only — KXBTC / KXETH events. ~14% of current trade count and P&L (sports parlays dominate the rest). Not hedgeable for sports, weather, or any non-asset-referencing Kalshi contract.
+
+**Does not apply to:** Sports parlay and weather trades — those stay directional as today. The hedging layer is an *additive* overlay, not a rewrite.
+
+### 5.3 Thesis for why hedging adds value
+
+Expected P&L per trade is unchanged; hedging modifies the *path*, not the outcome. The tangible wins:
+
+1. **Smoother intra-event mark-to-market.** Most of a Kalshi crypto-range-bucket contract's 25h price swing is driven by BTC spot movement. Hedging strips that component out. Estimate: per-trade σ drops 30–50% on the crypto slice.
+2. **Higher allowable leverage.** Lower mark-to-market σ under the same drawdown tolerance means ~1.5× position size (or 1.5× N_target). Paper book is currently at ~36 concurrent crypto positions vs. N_target=150 — hedging widens that envelope.
+3. **Separable risk accounting.** "Calibration edge" and "spot directional exposure" become distinct P&L attributions. Matters for decay-vs-drift diagnostics post-live.
+4. **Execution comfort.** Reduces the risk of operational panic-closes on directional drawdown during event life.
+
+### 5.4 Costs and risks
+
+| Cost / risk | Magnitude | Mitigation |
+|---|---|---|
+| Hedge-leg fees | 0.4–0.9% of hedge notional per event (hourly rebalance, Hyperliquid 0.015% maker / 0.035% taker) | Maker-prefer on calm days; adjust re-hedge cadence below hourly when σ low |
+| Index tracking error | Kalshi settles on CME CF BTC Reference Rate; Hyperliquid tracks its own oracle. ~20–50bp typical divergence, wider in vol spikes | Monitor basis; suspend hedging when divergence exceeds threshold |
+| Delta mis-specification | Computed deltas assume lognormal; if conditional shape differs, hedge is biased | D3 of the diagnostic showed lognormal and empirical-bootstrap BTC distributions agree — low risk, but re-check in walk-forward |
+| Infrastructure complexity | New execution path, new monitor, new PnL attribution layer | Contain in a single module behind a feature flag; off by default |
+| Tracking-error tail risk | Black-swan decoupling of the two references could turn the hedge into an uncorrelated loss | Hard cap on hedge position size; kill switch on basis > 1% |
+
+### 5.5 Prerequisites
+
+Hedging requires data and infrastructure that PM Underwriting doesn't currently use:
+
+1. **Hyperliquid funding rate history.** Currently not local. Blocking dependency on [`data-pipeline.md`](data-pipeline.md) M2.
+2. **1-minute BTC_PERP candles.** For realized-vol estimation and tighter re-hedge timing. Blocking on data-pipeline M2.
+3. **Live Hyperliquid execution client in PM runner.** The sibling `kalshi-arb-trader` handles Kalshi execution; `crypto-copy-bot` has Hyperliquid execution for spot+futures. Neither covers the perp-only execution we'd need.
+4. **Basis monitoring.** Cross-check Kalshi settlement index vs. Hyperliquid oracle at each re-hedge decision. New monitor.
+
+### 5.6 Implementation sketch (when and if triggered)
+
+Roughly 1–2 weeks after data pipeline is in place:
+
+1. **Delta function.** Given (p_i_ladder, spot, σ, T): compute ∂(portfolio_payoff)/∂(spot) via finite difference on bucket prices (linearly-interpolated CDF). ~30 lines.
+2. **Hedge position sizing.** Round to Hyperliquid's lot size; respect min-size constraints for thin alts. ~20 lines.
+3. **Re-hedge loop.** Hourly cron during active events; skip if delta drift < tolerance band. Integrate with existing paper runner. ~100 lines.
+4. **Hedge-adjusted sizing.** `book_σ_target` budget accounts for hedged-σ of crypto positions; sports positions sized as today against their own σ. Minor change to `portfolio.size_position()`.
+5. **PnL attribution.** Per-event ledger row gets `hedge_pnl` + `tracking_error` columns separate from `calibration_pnl`. Minor change to `monitor.py`.
+
+### 5.7 Pre-committed decision criteria
+
+**Trigger to build (move Phase 5 from "Optional" to "In Progress"):**
+- Phase 4 (Live Small) runs ≥ 30 days with crypto-slice observed-σ meeting or exceeding walk-forward prediction AND observable mark-to-market discomfort — OR —
+- Data pipeline M2 ships and hedge-overlay ROI can be demonstrated on replayed paper-book positions with <0.5% fee drag per event.
+
+**Trigger to kill (close Phase 5 as "Not Pursued"):**
+- Live crypto slice shrinks to <5% of book P&L after scanner re-tuning (maybe the D1 far-OTM opportunity was narrower than it looked) — OR —
+- Data pipeline reveals Kalshi-vs-Hyperliquid index tracking error is wide enough (>1% typical) that hedging adds more σ than it removes.
+
+### 5.8 Cross-references
+
+- Source of the finding: [`docs/rd/deep-dive-kalshi-hyperliquid-vol-surface.md`](../rd/deep-dive-kalshi-hyperliquid-vol-surface.md) §14
+- Data prerequisites: [`docs/implementation/data-pipeline.md`](data-pipeline.md) M2
+- Current sizing framework: [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md) — any hedging layer must preserve equal-σ at book level

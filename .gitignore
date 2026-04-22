@@ -13,6 +13,7 @@ data/orderbook/
 data/kalshi_hf/
 data/calibration/
 data/vol_surface/
+data/fomc/
 data/paper/*
 !data/paper/manifest.toml
 data/*.db

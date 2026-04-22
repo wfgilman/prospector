@@ -293,3 +293,127 @@ If this prospectus is accepted, the immediate next action is a 1-week historical
 If the raw βs look promising, we move to full implementation. If not, we revisit.
 
 That single experiment answers the core question and costs a week. It is the next thing to do.
+
+---
+
+## 12. Event-study methodology (pre-registration, 2026-04-22)
+
+Importing the `§5.0`-style discipline from the #10 deep-dive: lock every continuous/discretionary knob before any script runs, so the result can't be retro-fit to a post-hoc story. Lessons carry from #10: raw-gap magnitudes looked huge but came from reference-model mismatch, not real mispricing, and the first failure was instructive only because the pre-registration made it sharp.
+
+### 12.1 Data constraints (observed, not chosen)
+
+- **Kalshi HF dataset** ends 2026-01-30 (stale ~3 months vs. live date). Re-pull blocked until in-house data pipeline M1 ships per [`docs/implementation/data-pipeline.md`](../implementation/data-pipeline.md).
+- **Hyperliquid OHLCV** locally covers 2025-09-17 → 2026-04-22 at 1h granularity. No 1m candles yet (blocking on data-pipeline M2). No funding data.
+- **Overlap window**: 2025-09-17 → 2026-01-30, ~4.5 months.
+- **FOMC meetings in window**: FED-25SEP (Sep 17), FED-25OCT (Oct 29), FED-25DEC (Dec 10), KXFED-26JAN (Jan 28). Four meetings.
+
+Consequence: the prospectus §11's "1m BTC/ETH/SOL" horizon is not available this pass. We test at **1h granularity only**; if the β is there at 1h it'll be there at 1m too, and if it's near zero at 1h, finer-grained measurement won't rescue a missing effect.
+
+### 12.2 Pre-registered hyperparameters
+
+| Knob | Locked value | Rationale |
+|---|---|---|
+| Event universe | All `FED-YY{SEP,OCT,DEC}` + `KXFED-26JAN` strike-ladder contracts | Only ladder families with multiple strikes; excludes `KXFEDDECISION-*` cut/hike/hold contracts (different structure) |
+| Horizon | Per-hour snapshots, BTC return over [t, t+1h] lagged | Matches OHLCV granularity; lagged (not concurrent) to measure lead-lag, not co-movement |
+| Kalshi aggregation | Implied expected rate = Σ p_i · midpoint_of_strike_bucket_i (reconstructed hourly from strike ladder) | Single scalar per timestamp — cleaner than tracking individual strikes |
+| ΔP definition | 1h change in implied expected rate (percentage points) | Matches lag horizon |
+| Ladder-completeness filter | ≥0.75 of max-strikes-observed per event | Same discipline as #10 |
+| Coins | BTC_PERP, ETH_PERP | SOL_PERP local but no matching Kalshi crypto-price contracts tested this pass |
+| Expected β sign | Negative (dovish ΔP → positive BTC return) | Theoretical prior; report as directional hypothesis |
+
+### 12.3 Pre-registered experimental design
+
+1. **Date split.** Train: events resolving in 2025-09-17 → 2025-12-31 (FED-25SEP, FED-25OCT, FED-25DEC pre-meeting data). Test: events resolving in 2026-01-01 → 2026-01-30 (KXFED-26JAN pre-meeting data). This is a 3-event train / 1-event test split — small but necessary given the event count. Additional runs on any future FOMC cycles become natural out-of-sample folds as the in-house data pipeline ships.
+2. **Test fold seen once.** All exploration, hyperparameter-intuition, outlier inspection happens on train. Test is run once at the end.
+3. **Null benchmark.** Random permutation of the (ΔP, BTC return) pairing within the test fold. Real signal must beat null on t-stat ratio.
+4. **Pre-committed pass criteria (all required on test fold):**
+   - |t-stat of β| > 3.0 in the lagged regression
+   - R² > 0.002 (any non-trivial explanatory power)
+   - β sign matches directional prior (negative)
+   - Null-shuffle |t-stat| < ⅓ of real |t-stat|
+5. **Full-distribution reporting.** Regressions reported per-coin and per-event, not collapsed to a single number. If any one event or coin drags the aggregate, that's visible in the breakdown.
+
+### 12.4 What this pass does not test
+
+- **Sub-hour granularity** (blocked on data pipeline M2).
+- **Information-transmission classification** — the LLM-driven news-filter step in §3.3. For this pass the regression is a raw beta; the LLM classifier only matters if the raw phenomenon exists.
+- **Other macro contract classes.** CPI, NFP, elections deferred to follow-on work if Fed passes.
+
+### 12.5 Decision rule post-results
+
+- **Pass** → continue to scoped prototype per §7 (MVP: single contract class, 3 tokens, one direction). Data-pipeline investment still load-bearing for 1m granularity.
+- **Fail with directional sign correct but t-stat weak** → N-limited. Wait for data pipeline extension, re-run on more events. Don't retrofit.
+- **Fail with wrong sign or null-indistinguishable** → pivot to a different strategy family from [`strategy-families.md`](strategy-families.md); #2 (token unlocks) or #12 (weather ensemble) are the queued alternatives.
+
+---
+
+## 13. Phase 1 event study findings (2026-04-22)
+
+**Pre-registered verdict: FAIL.** Across both coins, no pre-registered criterion passed on the test fold.
+
+### 13.1 Results
+
+| Regression | n | β | t-stat | R² |
+|---|---|---|---|---|
+| train_BTC_PERP | 1,442 | +0.0195 | +0.53 | 0.0002 |
+| **test_BTC_PERP** | **720** | **+0.0383** | **+1.05** | **0.0015** |
+| test_null_BTC_PERP | 720 | +0.0331 | +0.91 | 0.0011 |
+| train_ETH_PERP | 1,442 | +0.0174 | +0.31 | 0.0001 |
+| **test_ETH_PERP** | **720** | **+0.0094** | **+0.18** | **0.0001** |
+| test_null_ETH_PERP | 720 | −0.0970 | −1.88 | 0.0049 |
+
+Per-event breakdown on train:
+
+| Event | BTC t-stat | ETH t-stat |
+|---|---|---|
+| FED-25SEP | — (n=2, edge of OHLCV window) | — |
+| FED-25OCT | +0.73 | +0.30 |
+| FED-25DEC | +0.20 | +0.15 |
+
+### 13.2 Pre-registered pass-criteria check
+
+| Criterion | BTC | ETH |
+|---|---|---|
+| (a) \|t-stat β\| > 3.0 | FAIL (1.05) | FAIL (0.18) |
+| (b) R² > 0.002 | FAIL (0.0015) | FAIL (0.0001) |
+| (c) sign(β) = negative | **FAIL (sign is positive)** | **FAIL (sign is positive)** |
+| (d) null t-stat ratio | FAIL (null ≈ real) | FAIL (null bigger than real) |
+
+### 13.3 Data-staleness finding worth memorializing
+
+The HF dataset had `FED-25DEC` and `KXFED-26JAN` stored with `status='active'` — Kalshi had not yet finalized them when the TrevorJS snapshot was taken. Trades through event close are present regardless, but a naive `WHERE status='finalized'` filter drops half the events. This is exactly the kind of third-party-data subtlety the in-house pipeline (`docs/implementation/data-pipeline.md`) is justified by: our own ingest will have a single, consistent, time-labeled status field we control the semantics of.
+
+### 13.4 Interpretation
+
+The test is faithful to the pre-registration, but three facts about the test design matter for how to interpret the result:
+
+1. **Hourly granularity is the measurement we have, not the measurement the thesis wants.** §1 of this deep-dive hypothesizes "a persistent information lag ... on a 1–60 minute horizon." At 1h granularity, any transmission that happens in 10–30 minutes is invisible — the return window we regress on includes both the lag *and* the reversal, averaging toward zero. Data pipeline M2 (1m BTC/ETH candles) unblocks the intended test.
+2. **No news filter was applied.** §3.3 specifies an LLM classifier that rejects non-news-driven ΔP (noise from liquidity, fat-finger). This Phase 1 deliberately skipped that step to isolate the raw phenomenon. Mixing real FOMC-news-driven moves with noise ΔP dilutes any true β toward zero. A null result here doesn't falsify the full prospectus — it falsifies a *specific simplified version*.
+3. **The null-shuffle comparison is noisy at n=720.** ETH's shuffled null produced a larger absolute t-stat than the real signal. That's a red flag on the null construction at this sample size, not evidence of a signal. The right fix is more events (more FOMC cycles, once the data pipeline ships), not a cleverer permutation scheme.
+
+That said: the sign-prior failed in both train and test. Dovish Kalshi shifts did not coincide with BTC up-moves on average. Two possibilities:
+- The thesis is wrong for BTC: Kalshi's FFR contracts are already well-arbitraged with the SOFR futures market, and crypto isn't where the marginal macro trader is looking for expression. The "audience mismatch" argument in §2 may be weaker than the prospectus imagined.
+- The sign reversal is an artifact of the measurement coarseness — at 1h, the initial reaction and the reversion both happen inside one return window and the sign is determined by whichever moves more, not by the underlying transmission.
+
+Without higher-frequency data we can't distinguish these.
+
+### 13.5 Decision per §12.5
+
+Strictly pre-registered rule: *"Fail with wrong sign or null-indistinguishable → pivot."* Both conditions are met.
+
+But the pivot decision has a different character here than for #10. #10 failed because the convergence formulation didn't match what the data showed (real signal existed but didn't converge mechanically). #4 failed because **we could not measure the specific phenomenon the thesis requires** — the granularity mismatch is upstream of the thesis itself.
+
+Honest recommendation:
+
+**Primary action: defer #4 pending data pipeline M2.** Mark #4 as *"Blocked — requires 1m OHLCV from data pipeline. Resume once M2 ships; re-run with hourly-snapshot-of-ΔP vs. 5m/15m/30m BTC return horizons."* Not a pivot, but not active either. Pre-registered criteria stay locked; the next test gets the granularity it always needed.
+
+**Parallel action: prioritize the data pipeline.** The same infrastructure gap blocks #10 Phase 3 (re-validation on fresh data), the #4 follow-on (1m granularity), and the potential PM Phase 5 hedging overlay (funding + 1m). Three downstream users for one upstream build — straightforward ROI for the data-pipeline sprint.
+
+**If the investor wants an R&D track running while the data pipeline is built:** #2 (token unlocks) is the lightest-touch candidate — it uses Token Unlocks / CryptoRank data (public APIs) and Hyperliquid perps (we have hourly candles), no Kalshi dependency, no 1m requirement. A scoped 1-week historical event study on (unlock event, next-30-day perp return) is runnable today and doesn't compete with data-pipeline work.
+
+### 13.6 Artifacts
+
+- `scripts/fomc_event_study.py` — locked-hyperparameter script
+- `data/fomc/event_study_panel.parquet` — hourly panel with implied rate, Δ-rate, BTC/ETH returns
+- `data/fomc/regression_results.csv` — every regression fit, including per-event breakdown
+- `data/fomc/summary.txt` — plain-text pass/fail record

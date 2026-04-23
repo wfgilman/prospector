@@ -149,6 +149,9 @@ def load_positions(db_path: Path, status: str | None = None) -> pd.DataFrame:
         return df
     df["entry_time"] = pd.to_datetime(df["entry_time"], utc=True)
     df["close_time"] = pd.to_datetime(df["close_time"], utc=True)
+    df["expected_close_time"] = pd.to_datetime(
+        df["expected_close_time"], utc=True
+    )
     return df
 
 
@@ -276,24 +279,6 @@ html, body, [class*="st-"], .stApp, .stMarkdown, button, input, textarea {{
     color: var(--qt-text-dim);
     margin: 0;
 }}
-.qt-display {{
-    font-family: 'Fraunces', 'Times New Roman', serif;
-    font-variation-settings: 'opsz' 96, 'wght' 400;
-    font-size: clamp(2.4rem, 5vw, 3.4rem);
-    line-height: 1;
-    letter-spacing: -0.02em;
-    color: var(--qt-text);
-    margin: 0.25rem 0 0.5rem 0;
-}}
-.qt-display-sm {{
-    font-family: 'Fraunces', serif;
-    font-variation-settings: 'opsz' 48, 'wght' 500;
-    font-size: 1.35rem;
-    letter-spacing: -0.01em;
-    color: var(--qt-text);
-    margin: 0;
-}}
-
 /* Numbers — tabular mono, everywhere */
 .qt-mono, .qt-num {{
     font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace;
@@ -301,16 +286,16 @@ html, body, [class*="st-"], .stApp, .stMarkdown, button, input, textarea {{
     font-feature-settings: "tnum" 1, "zero" 1;
 }}
 
-/* Hero card */
-.qt-hero {{
+/* Unified strategy stat card */
+.qt-stat-card {{
     background: linear-gradient(180deg, var(--qt-surface) 0%, var(--qt-bg) 100%);
     border: 1px solid var(--qt-border);
     border-radius: 4px;
-    padding: 1.5rem 1.75rem;
+    padding: 0.9rem 1.25rem;
     position: relative;
     overflow: hidden;
 }}
-.qt-hero::before {{
+.qt-stat-card::before {{
     content: '';
     position: absolute;
     top: 0; left: 0; right: 0;
@@ -320,26 +305,58 @@ html, body, [class*="st-"], .stApp, .stMarkdown, button, input, textarea {{
     );
     opacity: 0.5;
 }}
-.qt-hero-nav {{
+.qt-stat-card-head {{
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    margin-bottom: 0.6rem;
+}}
+.qt-stat-card-name {{
+    font-family: 'Fraunces', serif;
+    font-variation-settings: 'opsz' 48, 'wght' 500;
+    font-size: 1.05rem;
+    color: var(--qt-text);
+    letter-spacing: -0.01em;
+}}
+.qt-stat-card-tick {{
     font-family: 'JetBrains Mono', monospace;
     font-variant-numeric: tabular-nums;
-    font-size: 3.2rem;
+    font-size: 0.7rem;
+    color: var(--qt-text-dim);
+}}
+.qt-stat-card-row {{
+    display: flex;
+    align-items: flex-start;
+    gap: 1.75rem;
+    flex-wrap: wrap;
+}}
+.qt-stat-card-item {{
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}}
+.qt-stat-card-item.primary {{
+    padding-right: 1.75rem;
+    border-right: 1px solid var(--qt-border);
+}}
+.qt-stat-card-nav {{
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 1.7rem;
     font-weight: 500;
-    letter-spacing: -0.03em;
-    line-height: 1;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
     color: var(--qt-text);
 }}
-.qt-hero-delta {{
+.qt-stat-card-delta {{
     font-family: 'JetBrains Mono', monospace;
     font-variant-numeric: tabular-nums;
-    font-size: 1rem;
-    font-weight: 500;
-    letter-spacing: 0;
-    margin-top: 0.5rem;
+    font-size: 0.8rem;
 }}
-.qt-hero-delta.up {{ color: var(--qt-accent); }}
-.qt-hero-delta.down {{ color: var(--qt-loss); }}
-.qt-hero-delta.flat {{ color: var(--qt-text-dim); }}
+.qt-stat-card-delta.up {{ color: var(--qt-accent); }}
+.qt-stat-card-delta.down {{ color: var(--qt-loss); }}
+.qt-stat-card-delta.flat {{ color: var(--qt-text-dim); }}
 
 /* KPI tiles */
 .qt-kpi {{
@@ -551,50 +568,21 @@ def _render_kalshi_binary(entry: StrategyEntry) -> None:
         st.info(f"Portfolio DB not found at {entry.portfolio_db}.")
         return
 
-    _render_hero(entry, summary)
-    _render_kpis(summary)
+    _render_stat_card(entry, summary)
     _render_nav(entry.portfolio_db)
     _render_category_sections(entry.portfolio_db)
     _render_concentration(entry.portfolio_db, summary)
     _render_tick_stream(entry.log_dir)
 
 
-def _render_hero(entry: StrategyEntry, summary: PortfolioSummary) -> None:
+def _render_stat_card(entry: StrategyEntry, summary: PortfolioSummary) -> None:
+    """Single compact card collapsing hero + KPIs + freshness into one row."""
     import streamlit as st
 
     delta = summary.nav - summary.initial_nav
     roi = delta / summary.initial_nav * 100 if summary.initial_nav else 0.0
     direction = "up" if delta > 0 else ("down" if delta < 0 else "flat")
     arrow = "▲" if direction == "up" else ("▼" if direction == "down" else "◆")
-
-    st.markdown(
-        f"""
-        <div class="qt-hero">
-            <div class="qt-eyebrow">{entry.display_name}</div>
-            <div class="qt-display">Portfolio</div>
-            <div style="display:flex; align-items:baseline; gap:2rem; flex-wrap:wrap;">
-                <div>
-                    <div class="qt-kpi-label">Net Asset Value</div>
-                    <div class="qt-hero-nav">${summary.nav:,.2f}</div>
-                    <div class="qt-hero-delta {direction}">
-                        {arrow} {delta:+,.2f} &nbsp;·&nbsp; {roi:+.3f}%
-                    </div>
-                </div>
-                <div>
-                    <div class="qt-kpi-label">Seed Capital</div>
-                    <div class="qt-mono" style="font-size:1.1rem; color:var(--qt-text-dim);">
-                        ${summary.initial_nav:,.0f}
-                    </div>
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def _render_kpis(summary: PortfolioSummary) -> None:
-    import streamlit as st
 
     realized_cls = (
         "up" if summary.realized_pnl > 0
@@ -604,48 +592,55 @@ def _render_kpis(summary: PortfolioSummary) -> None:
         summary.locked_risk / summary.nav * 100 if summary.nav else 0.0
     )
 
-    kpis = [
-        (
-            "Realized P&L",
-            f"${summary.realized_pnl:+,.2f}",
-            realized_cls,
-            None,
-        ),
-        (
-            "Locked Risk",
-            f"${summary.locked_risk:,.2f}",
-            "flat",
-            f"{locked_pct:.2f}% of NAV",
-        ),
-        (
-            "Open Positions",
-            f"{summary.open_positions}",
-            "flat",
-            None,
-        ),
-        (
-            "Trades Today",
-            f"{summary.trades_today}",
-            "flat",
-            None,
-        ),
-    ]
+    ticks = load_tick_history(entry.log_dir, limit=1)
+    last = ticks[-1] if ticks else None
+    last_tick_str = (
+        last.timestamp.strftime("%Y-%m-%d %H:%M UTC")
+        if last and last.timestamp
+        else "—"
+    )
 
-    cols = st.columns(len(kpis), gap="small")
-    for col, (label, value, cls, sub) in zip(cols, kpis):
-        sub_html = (
-            f'<div class="qt-kpi-sub">{sub}</div>' if sub else ""
-        )
-        col.markdown(
-            f"""
-            <div class="qt-kpi">
-                <div class="qt-kpi-label">{label}</div>
-                <div class="qt-kpi-value {cls}">{value}</div>
-                {sub_html}
+    st.markdown(
+        f"""
+        <div class="qt-stat-card">
+            <div class="qt-stat-card-head">
+                <div class="qt-stat-card-name">{entry.display_name}</div>
+                <div class="qt-stat-card-tick">Last tick · {last_tick_str}</div>
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+            <div class="qt-stat-card-row">
+                <div class="qt-stat-card-item primary">
+                    <div class="qt-kpi-label">NAV</div>
+                    <div class="qt-stat-card-nav">${summary.nav:,.2f}</div>
+                    <div class="qt-stat-card-delta {direction}">
+                        {arrow} {delta:+,.2f} · {roi:+.2f}%
+                    </div>
+                </div>
+                <div class="qt-stat-card-item">
+                    <div class="qt-kpi-label">Seed</div>
+                    <div class="qt-kpi-value">${summary.initial_nav:,.0f}</div>
+                </div>
+                <div class="qt-stat-card-item">
+                    <div class="qt-kpi-label">Realized P&amp;L</div>
+                    <div class="qt-kpi-value {realized_cls}">${summary.realized_pnl:+,.2f}</div>
+                </div>
+                <div class="qt-stat-card-item">
+                    <div class="qt-kpi-label">Locked Risk</div>
+                    <div class="qt-kpi-value">${summary.locked_risk:,.2f}</div>
+                    <div class="qt-kpi-sub">{locked_pct:.2f}% of NAV</div>
+                </div>
+                <div class="qt-stat-card-item">
+                    <div class="qt-kpi-label">Open</div>
+                    <div class="qt-kpi-value">{summary.open_positions}</div>
+                </div>
+                <div class="qt-stat-card-item">
+                    <div class="qt-kpi-label">Trades Today</div>
+                    <div class="qt-kpi-value">{summary.trades_today}</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _render_nav(db_path: Path) -> None:
@@ -768,9 +763,16 @@ def _render_category_block(row: pd.Series, open_df: pd.DataFrame) -> None:
         "reward_potential",
         "contracts",
         "entry_time",
+        "expected_close_time",
     ]
     display_df = cat_positions[display_cols].copy()
     display_df["entry_time"] = display_df["entry_time"].dt.strftime("%m-%d %H:%M")
+    display_df["expected_close_time"] = (
+        display_df["expected_close_time"]
+        .dt.strftime("%m-%d %H:%M")
+        .fillna("—")
+    )
+    display_df = display_df.rename(columns={"expected_close_time": "expires"})
     st.dataframe(
         display_df.style.format(
             {

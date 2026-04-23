@@ -18,7 +18,6 @@ import streamlit as st
 
 from prospector.dashboard import (
     inject_theme,
-    load_tick_history,
     render_strategy,
 )
 from prospector.manifest import load_manifest
@@ -40,9 +39,9 @@ def main() -> None:
 
     st.markdown(
         """
-        <div style="margin-bottom:1.5rem;">
+        <div style="margin-bottom:1rem; display:flex; align-items:baseline; gap:0.6rem;">
             <div class="qt-eyebrow">Prospector</div>
-            <div class="qt-display">Paper trading</div>
+            <div class="qt-eyebrow" style="color:var(--qt-text);">· Paper trading</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -52,28 +51,11 @@ def main() -> None:
         st.info("No enabled strategies in the manifest.")
         return
 
-    # Freshness strip — last tick per strategy.
-    header = st.columns(len(entries), gap="small")
-    for col, entry in zip(header, entries):
-        ticks = load_tick_history(entry.log_dir, limit=1)
-        last = ticks[-1] if ticks else None
-        last_str = (
-            last.timestamp.strftime("%Y-%m-%d %H:%M UTC")
-            if last and last.timestamp
-            else "—"
-        )
-        col.markdown(
-            f"""
-            <div class="qt-kpi">
-                <div class="qt-kpi-label">{entry.display_name} · last tick</div>
-                <div class="qt-kpi-value">{last_str}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    for entry in entries:
-        st.markdown("<div style='height:2rem;'></div>", unsafe_allow_html=True)
+    for i, entry in enumerate(entries):
+        if i > 0:
+            st.markdown(
+                "<div style='height:1.25rem;'></div>", unsafe_allow_html=True
+            )
         render_strategy(entry)
 
 

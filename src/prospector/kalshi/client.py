@@ -201,13 +201,12 @@ class KalshiClient:
         min_ts: int | None = None,
         max_ts: int | None = None,
     ) -> Iterator[Trade]:
-        """Page through historical trades.
+        """Page through the **live** `/markets/trades` endpoint.
 
-        Kalshi's `/markets/trades` accepts optional `ticker`, `min_ts`,
-        `max_ts` (seconds since epoch), and cursor pagination. Trades are
-        returned newest-first. Without a ticker filter the endpoint walks
-        the global trade stream — useful for sanity checks but wrong for
-        backfill; callers typically pass a ticker."""
+        Retention-gated — only returns trades for tickers whose event
+        resolved within Kalshi's live window (roughly the last 2 months).
+        For older tickers use `iter_historical_trades`. Trades are
+        returned newest-first."""
         cursor: str | None = None
         while True:
             path = f"{API_PREFIX}/markets/trades?limit={_PAGE_LIMIT}"
@@ -227,6 +226,82 @@ class KalshiClient:
             if not cursor or len(trades) < _PAGE_LIMIT:
                 return
             time.sleep(0.3)
+
+    def iter_historical_trades(
+        self,
+        ticker: str,
+        *,
+        min_ts: int | None = None,
+        max_ts: int | None = None,
+    ) -> Iterator[Trade]:
+        """Page through the **historical** `/historical/trades` endpoint.
+
+        Public, no-auth, covers the full trade history back to the start
+        of Kalshi's archive. Unlike the live endpoint, this continues to
+        return trades for events resolved before the retention cutoff.
+
+        `ticker` is effectively required — the `event_ticker` filter does
+        not work here (returns unrelated trades). Caller resolves tickers
+        via `iter_historical_markets` then pulls per-ticker trades here."""
+        cursor: str | None = None
+        while True:
+            path = f"{API_PREFIX}/historical/trades?limit={_PAGE_LIMIT}"
+            path += f"&ticker={ticker}"
+            if min_ts is not None:
+                path += f"&min_ts={min_ts}"
+            if max_ts is not None:
+                path += f"&max_ts={max_ts}"
+            if cursor:
+                path += f"&cursor={cursor}"
+            data = self.get(path)
+            trades = data.get("trades", [])
+            for raw in trades:
+                yield _parse_trade(raw)
+            cursor = data.get("cursor") or None
+            if not cursor or len(trades) < _PAGE_LIMIT:
+                return
+            time.sleep(0.3)
+
+    def iter_historical_markets(
+        self,
+        *,
+        ticker: str | None = None,
+        event_ticker: str | None = None,
+    ) -> Iterator[Market]:
+        """Page through the **historical** `/historical/markets` endpoint.
+
+        Returns rich market metadata (includes settlement_ts, rules_primary,
+        volume_fp, and the full previous/latest bid-ask snapshot) for
+        events resolved before the retention cutoff. Exactly one of
+        `ticker` or `event_ticker` should be set."""
+        if not ticker and not event_ticker:
+            raise ValueError("iter_historical_markets requires ticker or event_ticker")
+        cursor: str | None = None
+        while True:
+            path = f"{API_PREFIX}/historical/markets?limit={_PAGE_LIMIT}"
+            if ticker:
+                path += f"&ticker={ticker}"
+            if event_ticker:
+                path += f"&event_ticker={event_ticker}"
+            if cursor:
+                path += f"&cursor={cursor}"
+            data = self.get(path)
+            markets = data.get("markets", [])
+            for raw in markets:
+                yield _parse_market(raw)
+            cursor = data.get("cursor") or None
+            if not cursor or len(markets) < _PAGE_LIMIT:
+                return
+            time.sleep(0.3)
+
+    def fetch_historical_cutoff(self) -> dict:
+        """Return Kalshi's current historical cutoff timestamps.
+
+        Shape: `{market_settled_ts, orders_updated_ts, trades_created_ts}`.
+        All three are ISO-8601 strings. Events with close/settlement
+        timestamps *before* the cutoff live in `/historical/*`; events at
+        or after live in the live namespace."""
+        return self.get(f"{API_PREFIX}/historical/cutoff")
 
     def iter_positions(self, settlement_status: str = "unsettled") -> Iterator[Position]:
         cursor: str | None = None

@@ -460,3 +460,131 @@ class TestIterEventsSeriesFilter:
         list(client.iter_events(status="settled", series_ticker="KXBTC"))
         assert any("series_ticker=KXBTC" in u for u in seen_urls)
         assert any("status=settled" in u for u in seen_urls)
+
+
+class TestHistoricalEndpoints:
+    """Tests for iter_historical_trades, iter_historical_markets, and
+    fetch_historical_cutoff. These endpoints are public / no-auth but the
+    client still signs requests (Kalshi ignores the signature for
+    unauthenticated endpoints; signing incurs no penalty)."""
+
+    def test_iter_historical_trades_requires_ticker_via_url(
+        self, client, monkeypatch
+    ):
+        seen_urls = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen_urls.append(str(request.url))
+            return httpx.Response(200, json={"trades": [], "cursor": None})
+
+        client._http = httpx.Client(
+            transport=httpx.MockTransport(handler), base_url="http://t"
+        )
+        monkeypatch.setattr(
+            "prospector.kalshi.client.time.sleep", lambda _x: None
+        )
+        list(client.iter_historical_trades(
+            ticker="FED-25OCT-T4.00", min_ts=1_700_000_000, max_ts=1_730_000_000,
+        ))
+        url = seen_urls[0]
+        assert "historical/trades" in url
+        assert "ticker=FED-25OCT-T4.00" in url
+        assert "min_ts=1700000000" in url
+        assert "max_ts=1730000000" in url
+
+    def test_iter_historical_trades_parses_count_fp(self, client, monkeypatch):
+        trades = [
+            {
+                "trade_id": "h-1", "ticker": "X", "count_fp": "229.79",
+                "yes_price_dollars": "0.01", "no_price_dollars": "0.99",
+                "taker_side": "yes", "created_time": "2026-01-02T12:00:00Z",
+            }
+        ]
+
+        def handler(_req):
+            return httpx.Response(200, json={"trades": trades, "cursor": None})
+
+        client._http = httpx.Client(
+            transport=httpx.MockTransport(handler), base_url="http://t"
+        )
+        monkeypatch.setattr(
+            "prospector.kalshi.client.time.sleep", lambda _x: None
+        )
+        got = list(client.iter_historical_trades(ticker="X"))
+        assert len(got) == 1
+        assert got[0].count == 230
+        assert got[0].yes_price == 0.01
+
+    def test_iter_historical_markets_event_filter(self, client, monkeypatch):
+        seen_urls = []
+
+        def handler(request):
+            seen_urls.append(str(request.url))
+            return httpx.Response(200, json={"markets": [], "cursor": None})
+
+        client._http = httpx.Client(
+            transport=httpx.MockTransport(handler), base_url="http://t"
+        )
+        monkeypatch.setattr(
+            "prospector.kalshi.client.time.sleep", lambda _x: None
+        )
+        list(client.iter_historical_markets(event_ticker="FED-25OCT"))
+        assert any("historical/markets" in u for u in seen_urls)
+        assert any("event_ticker=FED-25OCT" in u for u in seen_urls)
+
+    def test_iter_historical_markets_requires_filter(self, client):
+        with pytest.raises(ValueError, match="ticker or event_ticker"):
+            list(client.iter_historical_markets())
+
+    def test_iter_historical_markets_parses_dollar_fields(
+        self, client, monkeypatch
+    ):
+        markets = [{
+            "ticker": "FED-25OCT-T4.00",
+            "event_ticker": "FED-25OCT",
+            "title": "Will the FFR be above 4.00%?",
+            "status": "finalized",
+            "result": "no",
+            "open_time": "2024-08-21T14:00:00Z",
+            "close_time": "2025-10-29T17:55:00Z",
+            "expiration_time": "2025-11-05T18:05:00Z",
+            "yes_bid_dollars": "0.0200", "yes_ask_dollars": "0.0400",
+            "no_bid_dollars": "0.9600", "no_ask_dollars": "0.9800",
+            "last_price_dollars": "0.0300",
+            "volume_fp": "542.00", "open_interest_fp": "0.00",
+            "category": "Economics",
+        }]
+
+        def handler(_req):
+            return httpx.Response(200, json={"markets": markets, "cursor": None})
+
+        client._http = httpx.Client(
+            transport=httpx.MockTransport(handler), base_url="http://t"
+        )
+        monkeypatch.setattr(
+            "prospector.kalshi.client.time.sleep", lambda _x: None
+        )
+        got = list(client.iter_historical_markets(event_ticker="FED-25OCT"))
+        assert len(got) == 1
+        m = got[0]
+        assert m.ticker == "FED-25OCT-T4.00"
+        assert m.yes_bid == 0.02
+        assert m.yes_ask == 0.04
+        assert m.last_price == 0.03
+
+    def test_fetch_historical_cutoff(self, client, monkeypatch):
+        def handler(_req):
+            return httpx.Response(200, json={
+                "market_settled_ts": "2026-02-21T00:00:00Z",
+                "orders_updated_ts": "2026-02-21T00:00:00Z",
+                "trades_created_ts": "2026-02-21T00:00:00Z",
+            })
+
+        client._http = httpx.Client(
+            transport=httpx.MockTransport(handler), base_url="http://t"
+        )
+        monkeypatch.setattr(
+            "prospector.kalshi.client.time.sleep", lambda _x: None
+        )
+        cut = client.fetch_historical_cutoff()
+        assert cut["trades_created_ts"] == "2026-02-21T00:00:00Z"

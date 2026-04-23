@@ -225,6 +225,68 @@ PYTHONPATH=src python scripts/backfill_hyperliquid.py --verbose
 
 ---
 
+## 11. Historical-endpoint discovery — M1 cross-check now passes (2026-04-23)
+
+### 11.1 The discovery
+
+Yesterday's retention-window framing in §10 was half-wrong. A research probe surfaced a previously-unexplored namespace:
+
+- `/trade-api/v2/historical/trades` — public, no-auth; full trade history back to ≥ Jan 2025 (probably the beginning) by ticker
+- `/trade-api/v2/historical/markets` — public, no-auth; full market metadata with richer schema than the live `/markets` endpoint (includes `settlement_ts`, `rules_primary`, `volume_fp`, previous bid/ask snapshots)
+- `/trade-api/v2/historical/cutoff` — returns the per-field boundary timestamps (currently 2026-02-21 for trades, orders, market_settled)
+
+The retention window only genuinely gates **L2 orderbook** data — `/markets/{tkr}/orderbook` returns empty for old tickers and there is no `/historical/orderbook` counterpart.
+
+### 11.2 Schema retention map (corrected)
+
+| Data | Live endpoint retention-gated? | Historical alternative |
+|---|---|---|
+| Trades | Yes — `/markets/trades` returns 0 for old tickers | `/historical/trades` — full history, ticker-filtered |
+| Market metadata | Yes — `/markets/{tkr}` 404s for old, `/events/{evt}` returns `markets:[]` | `/historical/markets` — full history with rich schema |
+| Event metadata | No — `/events` always works (goes back to 2021) | n/a |
+| L2 orderbook | **Yes — no historical counterpart** | **Unrecoverable** |
+| Account order history | n/a | `/historical/orders` (auth-required) |
+
+### 11.3 Client + backfill changes
+
+- `KalshiClient.iter_historical_trades(ticker, min_ts=, max_ts=)` — historical-namespace variant of the existing `iter_trades`.
+- `KalshiClient.iter_historical_markets(ticker=, event_ticker=)` — parses the richer market schema via `_parse_market` (already handles `*_dollars` fields).
+- `KalshiClient.fetch_historical_cutoff()` — returns `{market_settled_ts, orders_updated_ts, trades_created_ts}`.
+- `backfill_series` now fetches the cutoff once per run and, for each event, branches on `strike_date < cutoff`: older events pulled via `/historical/*`, newer via live endpoints. `run_plan` shares the cutoff across all series.
+
+### 11.4 Live cross-check against TrevorJS HF — 100% match
+
+Ran `scripts/backfill_kalshi.py --series KXFED --max-events 2 --close-before 2025-11-01` and then `scripts/crosscheck_kalshi_hf.py`. The pilot pulled FED-25SEP + FED-25OCT (22 markets, 12,862 trades) via `/historical/*`, all within TrevorJS's coverage window.
+
+| Metric | Threshold | Observed |
+|---|---|---|
+| Per-ticker \|count_delta\| | ≤ 1 | 0 for all 22 tickers |
+| Per-ticker trade_id overlap | ≥ 99% | 1.0000 for all 22 tickers |
+| Per-ticker weighted-sum relative delta | ≤ 0.1% | ≤ 2.3e-16 (floating-point noise) |
+
+This validates the pipeline end-to-end: our historical pull is byte-for-byte equivalent to TrevorJS on the overlap set.
+
+### 11.5 Revised data strategy (replaces §10.2 framing)
+
+| Role | Source |
+|---|---|
+| Historical trades + market metadata | **Our ingest** via `/historical/*` — own the full archive |
+| Cross-validation (optional) | TrevorJS HF — kept as a second source for spot-checks |
+| Forward archive | Our incremental cron (live endpoints) |
+| L2 orderbook history | Not available anywhere — strategies that need it must capture live going forward |
+
+TrevorJS is no longer load-bearing. We can retire it from active use once the full backfill completes, or keep it as an independent second source for validation — both are valid and neither is urgent.
+
+### 11.6 Next action
+
+Run the full backfill on the user's machine:
+```
+PYTHONPATH=src python scripts/backfill_kalshi.py --verbose
+```
+Expected behavior: for each series, the log will show an "endpoint split" summary (N events via /historical/*, M via live). Most events will route historical; the most-recent handful route live.
+
+---
+
 ## 10. Kalshi retention discovery — revised strategy (2026-04-22)
 
 ### 10.1 What we found

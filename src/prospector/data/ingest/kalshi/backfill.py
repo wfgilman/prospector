@@ -78,16 +78,45 @@ class BackfillResult:
 
 
 def _iter_event_markets(
-    client: KalshiClient, event_ticker: str
+    client: KalshiClient,
+    event_ticker: str,
+    *,
+    use_historical: bool,
 ) -> Iterable[Market]:
     """Yield markets for a given event.
 
-    The list endpoint `/markets?event_ticker=X` does not reliably return
-    markets for already-resolved events (returns 0 even for events with
-    resolved markets). The single-event endpoint `/events/{event_ticker}`
-    always returns embedded markets regardless of age/status. Use it."""
-    _event, markets = client.fetch_event(event_ticker)
-    yield from markets
+    Two paths:
+      - Live: `/events/{event_ticker}` returns embedded markets. Only works
+        within the retention window.
+      - Historical: `/historical/markets?event_ticker=X` returns the full
+        market ladder with richer metadata. Works regardless of age.
+
+    Caller picks based on the event's strike_date vs. the historical
+    cutoff (see `_pick_endpoint_mode`)."""
+    if use_historical:
+        yield from client.iter_historical_markets(event_ticker=event_ticker)
+    else:
+        _event, markets = client.fetch_event(event_ticker)
+        yield from markets
+
+
+def _parse_cutoff(raw: dict) -> datetime:
+    """Parse the `/historical/cutoff` response into a UTC datetime.
+    All three cutoff fields are identical in practice; we use
+    `trades_created_ts` as the canonical boundary."""
+    ts = raw.get("trades_created_ts") or raw.get("market_settled_ts")
+    if not ts:
+        raise KeyError("no cutoff timestamp in historical/cutoff response")
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+def _pick_endpoint_mode(
+    strike_date: datetime | None, cutoff: datetime
+) -> bool:
+    """True = use /historical/* endpoints, False = use live endpoints."""
+    if strike_date is None:
+        return True  # conservative: unknown dates assumed historical
+    return strike_date < cutoff
 
 
 def backfill_series(
@@ -100,12 +129,22 @@ def backfill_series(
     close_before: datetime | None = None,
     rate_limit_sleep_s: float = 0.3,
     skip_with_watermark: bool = True,
+    cutoff: datetime | None = None,
 ) -> BackfillResult:
     """Backfill settled (or configured-status) events for a single series.
-    Writes to partitioned parquet under `root`. Returns counts."""
+    Writes to partitioned parquet under `root`. Returns counts.
+
+    Per-event endpoint selection: events whose `strike_date` is before the
+    historical cutoff are pulled via `/historical/*`; newer events via the
+    live `/events/{ticker}` + `/markets/trades` path. The cutoff is fetched
+    once per run (pass via `cutoff=` or will be fetched automatically)."""
     start = time.monotonic()
     state = watermark.load(root)
     pulled_at = datetime.now(timezone.utc)
+
+    if cutoff is None:
+        cutoff = _parse_cutoff(client.fetch_historical_cutoff())
+    logger.info("using historical cutoff: %s", cutoff.isoformat())
 
     events = list(client.iter_events(status=status, series_ticker=series_ticker))
     if close_before is not None:
@@ -141,12 +180,23 @@ def backfill_series(
     tickers_with_trades = 0
     trades_written = 0
     partitions_touched: set[str] = set()
+    n_historical = 0
+    n_live = 0
 
     for event in events:
         event_ticker = event.get("event_ticker", "")
         if not event_ticker:
             continue
-        markets = list(_iter_event_markets(client, event_ticker))
+        strike_date = _parse_event_close_time(event)
+        use_hist = _pick_endpoint_mode(strike_date, cutoff)
+        if use_hist:
+            n_historical += 1
+        else:
+            n_live += 1
+
+        markets = list(_iter_event_markets(
+            client, event_ticker, use_historical=use_hist
+        ))
         markets_seen += len(markets)
         if not markets:
             continue
@@ -164,7 +214,10 @@ def backfill_series(
                 and watermark.last_trade_time(state, m.ticker) is not None
             ):
                 continue
-            trades = list(client.iter_trades(ticker=m.ticker))
+            if use_hist:
+                trades = list(client.iter_historical_trades(ticker=m.ticker))
+            else:
+                trades = list(client.iter_trades(ticker=m.ticker))
             time.sleep(rate_limit_sleep_s)
             if not trades:
                 continue
@@ -185,6 +238,11 @@ def backfill_series(
             # Save state periodically so a crash doesn't lose much progress.
             watermark.save(root, state)
 
+    logger.info(
+        "%s: endpoint split — %d events via /historical/*, %d via live",
+        series_ticker, n_historical, n_live,
+    )
+
     watermark.update_events_pulled(state, series_ticker, pulled_at)
     watermark.save(root, state)
 
@@ -203,6 +261,10 @@ def run_plan(
     client: KalshiClient, plan: BackfillPlan, root: Path
 ) -> list[BackfillResult]:
     """Execute a BackfillPlan end-to-end. Returns per-series results."""
+    # Fetch cutoff once and share across all series in this run.
+    cutoff = _parse_cutoff(client.fetch_historical_cutoff())
+    logger.info("run_plan using historical cutoff: %s", cutoff.isoformat())
+
     results: list[BackfillResult] = []
     for series in plan.series_tickers:
         logger.info("starting backfill for series %s", series)
@@ -213,6 +275,7 @@ def run_plan(
             close_before=plan.close_before,
             rate_limit_sleep_s=plan.rate_limit_sleep_s,
             skip_with_watermark=plan.skip_tickers_with_watermark,
+            cutoff=cutoff,
         )
         logger.info(
             "%s done: %d events, %d markets, %d tickers with trades, "

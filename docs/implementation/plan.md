@@ -198,6 +198,7 @@ Expected P&L per trade is unchanged; hedging modifies the *path*, not the outcom
 | Delta mis-specification | Computed deltas assume lognormal; if conditional shape differs, hedge is biased | D3 of the diagnostic showed lognormal and empirical-bootstrap BTC distributions agree — low risk, but re-check in walk-forward |
 | Infrastructure complexity | New execution path, new monitor, new PnL attribution layer | Contain in a single module behind a feature flag; off by default |
 | Tracking-error tail risk | Black-swan decoupling of the two references could turn the hedge into an uncorrelated loss | Hard cap on hedge position size; kill switch on basis > 1% |
+| Stale `last_price` on illiquid OTM strikes (from sibling-project autopsy) | High | Medium | Reject any strike where `last_price` falls outside the live `[yes_bid, yes_ask]` when a valid book exists; fall back to `last_price` only when no two-sided book. The sibling `kalshi-arb-trader` ran 0-14 win-rate on illiquid ladders for three days before catching this. See their `tests/test_staleness_gates.py` for the template. |
 
 ### 5.5 Prerequisites
 

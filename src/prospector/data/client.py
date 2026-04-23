@@ -96,3 +96,38 @@ class HyperliquidClient:
         if not isinstance(result, dict):
             raise ValueError(f"Unexpected meta response: {result}")
         return result
+
+    def funding_history(
+        self,
+        coin: str,
+        start_ms: int,
+        end_ms: int | None = None,
+    ) -> list[dict]:
+        """
+        Fetch funding-rate history for a single coin over a time window.
+
+        Hyperliquid returns one row per funding tick (hourly on perp markets).
+        Each entry has keys: coin, fundingRate (string decimal), premium
+        (string decimal — mark-vs-index basis), time (ms since epoch).
+
+        Args:
+            coin:     Ticker, e.g. "BTC" or "BTC-PERP".
+            start_ms: Window start, milliseconds since epoch.
+            end_ms:   Optional window end; if None, Hyperliquid returns up
+                      to the current time.
+
+        Returns:
+            List of funding dicts. Caller is responsible for pagination
+            (Hyperliquid caps responses; 500-hour windows are safe).
+        """
+        payload: dict = {
+            "type": "fundingHistory",
+            "coin": _coin(coin),
+            "startTime": start_ms,
+        }
+        if end_ms is not None:
+            payload["endTime"] = end_ms
+        result = self._post(payload)
+        if not isinstance(result, list):
+            raise ValueError(f"Unexpected fundingHistory response: {result}")
+        return result

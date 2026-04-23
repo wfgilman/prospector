@@ -4,6 +4,7 @@ See `docs/implementation/data-pipeline.md` for scope, design principles, and
 the M1-M5 milestone plan.
 """
 
+from prospector.data.ingest.kalshi import watermark, writer
 from prospector.data.ingest.kalshi.backfill import (
     BackfillPlan,
     BackfillResult,
@@ -11,7 +12,6 @@ from prospector.data.ingest.kalshi.backfill import (
     run_plan,
 )
 from prospector.data.ingest.kalshi.incremental import pull_incremental
-from prospector.data.ingest.kalshi import watermark, writer
 
 __all__ = [
     "BackfillPlan",

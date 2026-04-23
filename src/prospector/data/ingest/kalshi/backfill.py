@@ -27,6 +27,21 @@ from prospector.data.ingest.kalshi import watermark, writer
 from prospector.kalshi.client import KalshiClient
 from prospector.kalshi.models import Market
 
+
+def _parse_event_close_time(event: dict) -> datetime | None:
+    """Pull an event's resolution time from an /events response.
+
+    Kalshi's `/events` payload does not embed market-level close_time, but
+    does include `strike_date` (event resolution timestamp) and
+    `last_updated_ts` as fallback. We use strike_date when present."""
+    raw = event.get("strike_date") or event.get("last_updated_ts")
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,13 +50,19 @@ class BackfillPlan:
     """Which series to backfill, with optional ticker filters per series.
 
     Example:
-        BackfillPlan(series_tickers=["KXBTC", "KXETH", "FED", "KXFED"])
+        BackfillPlan(series_tickers=["KXBTC", "KXETH", "KXFED"])
+
+    Kalshi's /events status param takes exactly one value, not a list.
+    Default to 'settled' since historical-backfill consumers want resolved
+    events. Callers that also want 'closed' events (past close_time,
+    pending settlement) can pass status='closed' and run a second pass.
     """
 
     series_tickers: list[str]
-    status: str = "settled,closed"        # Kalshi accepts comma-separated
+    status: str = "settled"
     max_events_per_series: int | None = None   # mostly for pilot runs
-    rate_limit_sleep_s: float = 0.3       # pause between API calls
+    close_before: datetime | None = None       # only pull events closing before this
+    rate_limit_sleep_s: float = 0.3            # pause between API calls
     skip_tickers_with_watermark: bool = True   # resumability
 
 
@@ -59,12 +80,14 @@ class BackfillResult:
 def _iter_event_markets(
     client: KalshiClient, event_ticker: str
 ) -> Iterable[Market]:
-    """Yield markets for a given event. Kalshi /events returns the markets
-    list embedded in the event object too, but iter_markets is paginated
-    which is safer for events with many strikes."""
-    yield from client.iter_markets(
-        status="settled", event_ticker=event_ticker
-    )
+    """Yield markets for a given event.
+
+    The list endpoint `/markets?event_ticker=X` does not reliably return
+    markets for already-resolved events (returns 0 even for events with
+    resolved markets). The single-event endpoint `/events/{event_ticker}`
+    always returns embedded markets regardless of age/status. Use it."""
+    _event, markets = client.fetch_event(event_ticker)
+    yield from markets
 
 
 def backfill_series(
@@ -72,18 +95,41 @@ def backfill_series(
     series_ticker: str,
     root: Path,
     *,
-    status: str = "settled,closed",
+    status: str = "settled",
     max_events: int | None = None,
+    close_before: datetime | None = None,
     rate_limit_sleep_s: float = 0.3,
     skip_with_watermark: bool = True,
 ) -> BackfillResult:
-    """Backfill all settled/closed events for a single series. Writes to
-    partitioned parquet under `root`. Returns counts."""
+    """Backfill settled (or configured-status) events for a single series.
+    Writes to partitioned parquet under `root`. Returns counts."""
     start = time.monotonic()
     state = watermark.load(root)
     pulled_at = datetime.now(timezone.utc)
 
     events = list(client.iter_events(status=status, series_ticker=series_ticker))
+    if close_before is not None:
+        before = close_before
+        if before.tzinfo is None:
+            before = before.replace(tzinfo=timezone.utc)
+        filtered = []
+        dropped_no_date = 0
+        for ev in events:
+            ct = _parse_event_close_time(ev)
+            if ct is None:
+                # Drop events we can't time-check rather than silently
+                # admitting them (previous bug: kept all untimed events).
+                dropped_no_date += 1
+                continue
+            if ct < before:
+                filtered.append(ev)
+        if dropped_no_date:
+            logger.warning(
+                "%s: %d events had no strike_date/last_updated_ts — "
+                "dropped from close_before filter",
+                series_ticker, dropped_no_date,
+            )
+        events = filtered
     if max_events is not None:
         events = events[:max_events]
     logger.info("%s: %d events", series_ticker, len(events))
@@ -164,6 +210,7 @@ def run_plan(
             client, series, root,
             status=plan.status,
             max_events=plan.max_events_per_series,
+            close_before=plan.close_before,
             rate_limit_sleep_s=plan.rate_limit_sleep_s,
             skip_with_watermark=plan.skip_tickers_with_watermark,
         )

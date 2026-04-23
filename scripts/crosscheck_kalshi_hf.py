@@ -50,11 +50,24 @@ def load_ours(root: Path) -> pd.DataFrame:
     """).to_df()
 
 
-def load_hf(hf_dir: Path) -> pd.DataFrame:
+def load_hf_for_tickers(hf_dir: Path, tickers: list[str]) -> pd.DataFrame:
+    """Stream the HF trades parquets filtered to the tickers we actually
+    care about. For a pilot this is 500-1000 tickers out of ~17M, so the
+    filter prunes ~99% of rows before materializing."""
     glob = str(hf_dir / "trades-*.parquet")
+    if not tickers:
+        return pd.DataFrame(
+            columns=["trade_id", "ticker", "count",
+                     "yes_price", "no_price", "created_time"]
+        )
+    # DuckDB can't handle a parameterized IN list directly via f-string
+    # safely, but our tickers are internal (from our own parquet) so
+    # string-quoting is safe. Escape single quotes defensively.
+    quoted = ", ".join(f"'{t.replace(chr(39), chr(39)*2)}'" for t in tickers)
     return duckdb.sql(f"""
         SELECT trade_id, ticker, count, yes_price, no_price, created_time
         FROM read_parquet('{glob}')
+        WHERE ticker IN ({quoted})
     """).to_df()
 
 
@@ -106,9 +119,9 @@ def main() -> None:
     ours = load_ours(args.ours)
     print(f"  {len(ours):,} rows, {ours['ticker'].nunique():,} tickers")
 
-    print(f"Loading TrevorJS HF from {args.hf}...")
-    hf = load_hf(args.hf)
-    # Apply date window.
+    pilot_tickers = ours["ticker"].unique().tolist()
+    print(f"Loading TrevorJS HF from {args.hf} (filtered to {len(pilot_tickers)} pilot tickers)...")
+    hf = load_hf_for_tickers(args.hf, pilot_tickers)
     hf["created_time"] = pd.to_datetime(hf["created_time"], utc=True)
     mask = (
         (hf["created_time"] >= pd.Timestamp(args.overlap_start, tz="UTC"))

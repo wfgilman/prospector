@@ -358,6 +358,17 @@ class TestParseTrade:
         assert trade.taker_side == "yes"
         assert trade.created_time.year == 2025
 
+    def test_count_fp_fallback(self):
+        raw = {
+            "trade_id": "t-fp", "ticker": "X",
+            "count_fp": "229.79",
+            "yes_price_dollars": "0.01", "no_price_dollars": "0.99",
+            "taker_side": "yes", "created_time": "2026-04-23T03:03:00Z",
+        }
+        t = _parse_trade(raw)
+        assert t.count == 230  # round(229.79)
+        assert t.yes_price == 0.01
+
     def test_prefers_dollar_fields_when_present(self):
         raw = {
             "trade_id": "t-2", "ticker": "X", "count": 1,

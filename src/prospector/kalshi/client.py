@@ -125,6 +125,19 @@ class KalshiClient:
         raw = data.get("market") or data
         return _parse_market(raw)
 
+    def fetch_event(self, event_ticker: str) -> tuple[dict, list[Market]]:
+        """Fetch an event and its embedded markets in one call.
+
+        Returns (event_dict, [Market, ...]). Use this for backfill —
+        the list endpoint `/markets?event_ticker=X` does not reliably
+        return markets for already-resolved events, but `/events/{tkr}`
+        always does."""
+        data = self.get(f"{API_PREFIX}/events/{event_ticker}")
+        event = data.get("event", data)
+        markets_raw = data.get("markets") or event.get("markets") or []
+        markets = [_parse_market(m) for m in markets_raw]
+        return event, markets
+
     def fetch_orderbook(self, ticker: str, depth: int = 10) -> Orderbook:
         data = self.get(f"{API_PREFIX}/markets/{ticker}/orderbook?depth={depth}")
         ob = data.get("orderbook_fp", data.get("orderbook", data))
@@ -356,10 +369,15 @@ def _parse_market(raw: dict) -> Market:
 def _parse_trade(raw: dict) -> Trade:
     """Normalize a Kalshi trade record. Prices are stored in [0, 1] floats;
     Kalshi publishes `yes_price`/`no_price` as cent integers and may also
-    publish `*_dollars` string fields in the post-2026 API."""
+    publish `*_dollars` string fields in the post-2026 API.
+
+    Count field: legacy API exposed integer `count`; the 2026 API also
+    exposes `count_fp` (fractional) for partial fills. Prefer count if
+    present; otherwise parse count_fp and round to nearest int (trades
+    at Kalshi are contract-integer at execution, count_fp uses fractional
+    representation as a quirk of the new API)."""
     yes = _parse_price(raw.get("yes_price")) or 0.0
     no = _parse_price(raw.get("no_price")) or 0.0
-    # Prefer the more precise *_dollars fields if present.
     yes_dollars = _parse_price(raw.get("yes_price_dollars"), default_scale_if_gt_one=False)
     if yes_dollars is not None:
         yes = yes_dollars
@@ -369,10 +387,22 @@ def _parse_trade(raw: dict) -> Trade:
     created = _parse_timestamp(raw.get("created_time"))
     if created is None:
         raise KalshiError(f"trade missing created_time: {raw}")
+    count_raw = raw.get("count")
+    if count_raw is None:
+        count_fp_raw = raw.get("count_fp")
+        if count_fp_raw is None:
+            count = 0
+        else:
+            try:
+                count = int(round(float(count_fp_raw)))
+            except (TypeError, ValueError):
+                count = 0
+    else:
+        count = int(count_raw or 0)
     return Trade(
         trade_id=str(raw.get("trade_id", "")),
         ticker=str(raw.get("ticker", "")),
-        count=int(raw.get("count", 0) or 0),
+        count=count,
         yes_price=yes,
         no_price=no,
         taker_side=str(raw.get("taker_side", "")),

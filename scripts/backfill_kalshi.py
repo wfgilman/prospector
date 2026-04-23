@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -30,13 +31,14 @@ load_dotenv(REPO_ROOT / ".env")
 
 # Series for PM underwriting + the two R&D tracks (#10 vol surface, #4 Fed).
 # Not exhaustive; user can override via --series.
+# Note: legacy FED-YYMMM event_tickers live under the KXFED series.
 DEFAULT_SERIES = [
     # Crypto range/threshold contracts (#10 + PM crypto longshots)
     "KXBTC", "KXBTCD", "KXETH", "KXETHD",
     # PM dominant series — sports parlays, NFL, NBA
     "KXMVENFL", "KXMVENBA", "KXMVESPORTS",
     # Fed rate contracts (#4 narrative spread)
-    "FED", "KXFED", "KXFEDDECISION",
+    "KXFED", "KXFEDDECISION",
 ]
 
 
@@ -59,8 +61,19 @@ def main() -> None:
         help="Re-pull tickers that already have a watermark",
     )
     parser.add_argument(
-        "--status", default="settled,closed",
-        help="Event status filter (default: settled,closed)",
+        "--status", default="settled",
+        help=(
+            "Event status filter. Kalshi accepts exactly one: "
+            "settled | closed | open | initialized. Default: settled."
+        ),
+    )
+    parser.add_argument(
+        "--close-before", type=str, default=None,
+        help=(
+            "Only backfill events whose markets closed before this UTC "
+            "date/datetime (YYYY-MM-DD or YYYY-MM-DDTHH:MM). Useful for "
+            "targeting events that overlap a known external dataset."
+        ),
     )
     parser.add_argument(
         "--rate-limit-sleep", type=float, default=0.3,
@@ -76,10 +89,19 @@ def main() -> None:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
+    close_before = None
+    if args.close_before:
+        close_before = datetime.fromisoformat(args.close_before).replace(
+            tzinfo=timezone.utc
+        ) if "T" in args.close_before else datetime.fromisoformat(
+            f"{args.close_before}T00:00:00"
+        ).replace(tzinfo=timezone.utc)
+
     plan = BackfillPlan(
         series_tickers=args.series,
         status=args.status,
         max_events_per_series=args.max_events,
+        close_before=close_before,
         rate_limit_sleep_s=args.rate_limit_sleep,
         skip_tickers_with_watermark=not args.no_skip,
     )

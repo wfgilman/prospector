@@ -136,6 +136,9 @@
 | 2026-04-22 | Keep in-repo at `src/prospector/data/ingest/` with module boundary for future spin-out | PM Underwriting already depends on the data layer; forcing two-repo coordination before the API is stable adds friction for no benefit. |
 | 2026-04-22 | Prioritize M1 (Kalshi) + M2 (Hyperliquid funding) as blocking for #10 Phase 3 | These two data gaps are the only ones strictly required to re-validate #10's thesis. Other M's can slip. |
 | 2026-04-22 | **M1 code shipped** (pending user pilot + cross-check) | KalshiClient extended with `iter_trades` + `series_ticker` on events; ingest module at `src/prospector/data/ingest/kalshi/` with writer/watermark/backfill/incremental; CLI scripts (`backfill_kalshi.py`, `pull_kalshi_incremental.py`, `crosscheck_kalshi_hf.py`); 48 unit tests passing. Next: user runs a small pilot (`--max-events 3 --series KXBTC FED`) and cross-checks against TrevorJS HF. |
+| 2026-04-22 | **Retention-window discovery and strategy revision** (during M1 pilot) | Kalshi's REST endpoints only expose recently-resolved events. Binary-searched KXBTC settled-events: oldest accessible event is 2026-02-15 (1,557 of 8,658 total — ~18%). KXFED: only 3 of 37 settled events accessible. TrevorJS HF cuts off 2026-01-30. **Zero overlap with TrevorJS.** Consequence: the cross-check approach (§9.2) cannot validate against TrevorJS. Revised plan: TrevorJS is the *historical archive* (immutable, pre-2026-01-30); in-house ingest is the *forward archive* (2026-02-15 onwards). Cross-check becomes internal consistency + spot-verification against Kalshi web UI. See §10. |
+| 2026-04-22 | **M2 funding + 1m candles shipped** | `HyperliquidClient.funding_history()`, `src/prospector/data/download_funding.py`, `scripts/backfill_hyperliquid.py`. Live probe verified on BTC + ETH (168 funding ticks/week as expected). Doesn't hit the Kalshi retention issue — Hyperliquid exposes full history. |
+| 2026-04-22 | **Additional API shape fixes** | Kalshi `/events?status=` takes exactly one value (comma-separated silently returns 0). `iter_events` defaults updated. Legacy `FED-YYMMM` event tickers are part of the `KXFED` series, not `FED`. `/markets?event_ticker=X` doesn't return markets for resolved events; `/events/{event_ticker}` does — `KalshiClient.fetch_event()` added and used by the backfill. New trades API exposes `count_fp` (fractional) instead of `count`; parser updated. |
 
 ---
 
@@ -206,12 +209,77 @@ Because Claude Code cannot access the user's Kalshi credentials or make live API
    ```
    Runs across the default series list (KXBTC/ETH/DOGE family, NFL/NBA/sports, FED rate-threshold contracts). Expected wall time: several hours depending on trade density. Resumable via the watermark, so interruption is safe.
 
-### 9.3 M2 scope (Hyperliquid funding + 1m candles)
+### 9.3 M2 scope (Hyperliquid funding + 1m candles) — **shipped 2026-04-22**
 
-M2 kicks off after M1 validation passes. Scope is smaller because `src/prospector/data/client.py` already has the Hyperliquid info-API wrapper — we extend rather than start fresh. Sketch:
-- Add `funding_history(coin, start_ms, end_ms)` → parquet writer
-- Add 1m granularity to the existing `download.py` candle pull
-- Funding + 1m candles partitioned by UTC date under `data/hyperliquid/`
-- Sanity monitors mirroring the Kalshi pattern
+- `HyperliquidClient.funding_history(coin, start_ms, end_ms)` on `src/prospector/data/client.py`
+- `src/prospector/data/download_funding.py` — parquet writer at `data/hyperliquid/funding/<COIN>.parquet`. Pagination over 500-hour windows.
+- `scripts/backfill_hyperliquid.py` — bundled entry point; pulls funding + 1m/1h/1d OHLCV for BTC/ETH/SOL.
+- 8 unit tests in `tests/data/test_download_funding.py`.
+- Live probe: 168 funding ticks for 7 days of BTC, schema as expected.
 
-Rough sizing: 2-3 days.
+**Not yet run for the full 730-day lookback** — user runs:
+```
+source .venv/bin/activate
+PYTHONPATH=src python scripts/backfill_hyperliquid.py --verbose
+```
+
+---
+
+## 10. Kalshi retention discovery — revised strategy (2026-04-22)
+
+### 10.1 What we found
+
+Binary-searched the retention boundary on KXBTC's 8,658 settled events:
+
+| Observation | Value |
+|---|---|
+| Oldest event with accessible markets (via `/events/{ticker}` embedded + `/markets/trades`) | 2026-02-15 |
+| Accessible events (KXBTC) | 1,557 / 8,658 (~18%) |
+| Accessible events (KXFED) | 3 / 37 (~8%) |
+| TrevorJS HF dataset end date | 2026-01-30 |
+| **Overlap window** | **None — retention starts after TrevorJS ends** |
+
+Probe results confirm the retention boundary is applied consistently: `/events/KXFED-26MAR` (strike 2026-03-18) returns 11 embedded markets; `/events/FED-25DEC` (strike 2025-12-10) returns 0. `/markets/trades?ticker=<older>` similarly returns 0 rows for older tickers.
+
+### 10.2 What this means for the data-pipeline thesis
+
+The original M1 value proposition — "back-fill our own historical dataset, cross-check against TrevorJS, replace dependency on third-party data" — is partially refuted by the API reality. Revised:
+
+| Role | Source | Window | Updateable? |
+|---|---|---|---|
+| **Historical archive** | TrevorJS/kalshi-trades HF | Jun 2021 → Jan 2026 | No — third-party, frozen |
+| **Forward archive** | In-house ingest (M1) | Feb 2026 → ongoing | Yes — daily cron |
+| **Gap (no data anywhere)** | Jan 31 → Feb 14, 2026 | ~2 weeks | No mitigation available |
+
+TrevorJS remains load-bearing for backtest work that needs pre-2026-02-15 data. For forward strategy R&D (PM live trading, #4 re-runs after more FOMC cycles arrive, #10 replayed on our own clean pulls), the in-house ingest is sufficient — it just doesn't retroactively replace the historical archive the way the original M1 description implied.
+
+### 10.3 Consequences for validation
+
+The original cross-check (`scripts/crosscheck_kalshi_hf.py`) cannot validate against TrevorJS because there is no overlap. Replaced with two weaker but honest checks:
+
+1. **Internal consistency** — on the pilot output, verify: (a) yes_price + no_price = 1.0 per trade (by Kalshi construction), (b) per-event ladder sum close to 1.0 on snapshots with a sufficiently complete strike ladder, (c) non-zero trade counts after the `count_fp` fix. All three pass on the pilot.
+2. **Spot-verify vs. Kalshi web UI** — for one currently-open event, compare our parquet's latest yes_price values against the Kalshi.com public market page. Manual, one-shot, but decisive.
+
+The `crosscheck_kalshi_hf.py` script is retained for the *incidental* case where an ingest run happens to overlap with a re-run of TrevorJS (if they ever release a newer snapshot). It will no-op cleanly when no overlap exists.
+
+### 10.4 Revised runbook
+
+Pilot is already validated (see §9.2; internal-consistency + shape-correctness on KXBTC + KXFED). Next step is scale-up:
+
+1. **Full forward backfill** — pulls everything currently accessible (~1,557 KXBTC events + per-series counts for other defaults):
+   ```
+   PYTHONPATH=src python scripts/backfill_kalshi.py --verbose
+   ```
+   Expected wall time: several hours (dominated by KXBTC's ~1,500 events × ~40 markets × trades-per-market).
+
+2. **Launchd / cron incremental pull** — 1×/day is fine for R&D. Add to `scripts/launchd/` next to the paper-trade plist.
+
+3. **Hyperliquid backfill** — independent of Kalshi, not affected by retention:
+   ```
+   PYTHONPATH=src python scripts/backfill_hyperliquid.py --verbose
+   ```
+   ~730 days of funding + 1m/1h/1d OHLCV for BTC/ETH/SOL.
+
+4. **Re-validate R&D tracks** once both pipelines have populated:
+   - #4 Phase 1 event study re-run on 1m BTC/ETH candles (the granularity the thesis requires)
+   - #10 Phase 3 re-validation on clean in-house data (caveat: only events from Feb 2026+; the original Week-1 spike was run on 2025-09 → 2026-01 TrevorJS data, no direct re-run possible without TrevorJS)

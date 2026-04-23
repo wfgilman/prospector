@@ -94,12 +94,13 @@ def test_write_trades_partitions_by_utc_date(tmp_path: Path) -> None:
 def _market(ticker: str, status: str = "finalized") -> Market:
     return Market(
         ticker=ticker, event_ticker="EVT", series_ticker="EVT",
-        title="t", status=status, result="yes",
+        title="t", yes_sub_title="", no_sub_title="",
+        status=status, result="yes",
         open_time=datetime(2025, 10, 1, tzinfo=timezone.utc),
         close_time=datetime(2025, 10, 2, tzinfo=timezone.utc),
         expiration_time=None,
         yes_bid=0.5, yes_ask=0.52, no_bid=0.48, no_ask=0.5,
-        last_price=0.51, volume=100, open_interest=50,
+        last_price=0.51, volume=100, volume_24h=0, open_interest=50,
         category="crypto", raw={},
     )
 

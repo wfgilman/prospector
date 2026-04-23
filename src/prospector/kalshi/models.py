@@ -47,12 +47,18 @@ class Market:
 
     All price fields are floats in [0, 1]. `result` is one of "yes", "no",
     "", or a settlement-specific string once the market resolves.
+
+    `yes_sub_title` / `no_sub_title` carry human-readable strike text like
+    "$84,250 to 84,749.99" or "Above 4.00%" — these are load-bearing for
+    PM Underwriting's calibration pipeline (strike parsing).
     """
 
     ticker: str
     event_ticker: str
     series_ticker: str
     title: str
+    yes_sub_title: str
+    no_sub_title: str
     status: str
     result: str
     open_time: datetime | None
@@ -64,6 +70,7 @@ class Market:
     no_ask: float | None
     last_price: float | None
     volume: int
+    volume_24h: int
     open_interest: int
     category: str
     raw: dict

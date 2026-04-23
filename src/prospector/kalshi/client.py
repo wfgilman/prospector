@@ -419,11 +419,36 @@ def _parse_market(raw: dict) -> Market:
     series_ticker = raw.get("series_ticker") or ""
     if not series_ticker and event_ticker:
         series_ticker = event_ticker.split("-", 1)[0]
+    # open_interest is exposed as both `open_interest` (legacy int) and
+    # `open_interest_fp` (fractional). Historical/markets uses the _fp form.
+    oi_raw = raw.get("open_interest")
+    if oi_raw is None:
+        oi_fp = raw.get("open_interest_fp")
+        open_interest = int(float(oi_fp)) if oi_fp is not None else 0
+    else:
+        open_interest = int(oi_raw or 0)
+
+    vol_raw = raw.get("volume")
+    if vol_raw is None:
+        vol_fp = raw.get("volume_fp")
+        volume = int(float(vol_fp)) if vol_fp is not None else 0
+    else:
+        volume = int(vol_raw or 0)
+
+    vol24_raw = raw.get("volume_24h")
+    if vol24_raw is None:
+        vol24_fp = raw.get("volume_24h_fp")
+        volume_24h = int(float(vol24_fp)) if vol24_fp is not None else 0
+    else:
+        volume_24h = int(vol24_raw or 0)
+
     return Market(
         ticker=raw.get("ticker", ""),
         event_ticker=event_ticker,
         series_ticker=series_ticker,
         title=raw.get("title", "") or raw.get("subtitle", ""),
+        yes_sub_title=raw.get("yes_sub_title", "") or "",
+        no_sub_title=raw.get("no_sub_title", "") or "",
         status=raw.get("status", ""),
         result=raw.get("result", "") or "",
         open_time=_parse_timestamp(raw.get("open_time")),
@@ -434,8 +459,9 @@ def _parse_market(raw: dict) -> Market:
         no_bid=_get_price(raw, "no_bid"),
         no_ask=_get_price(raw, "no_ask"),
         last_price=_get_price(raw, "last_price"),
-        volume=int(raw.get("volume", 0) or 0),
-        open_interest=int(raw.get("open_interest", 0) or 0),
+        volume=volume,
+        volume_24h=volume_24h,
+        open_interest=open_interest,
         category=raw.get("category", "") or "",
         raw=raw,
     )

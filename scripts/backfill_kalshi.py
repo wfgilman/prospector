@@ -18,11 +18,15 @@ import argparse
 import logging
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from prospector.data.ingest.kalshi.backfill import BackfillPlan, run_plan
 from prospector.kalshi.client import KalshiClient
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = REPO_ROOT / "data" / "kalshi"
+
+load_dotenv(REPO_ROOT / ".env")
 
 # Series for PM underwriting + the two R&D tracks (#10 vol surface, #4 Fed).
 # Not exhaustive; user can override via --series.

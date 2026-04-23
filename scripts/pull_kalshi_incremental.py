@@ -20,11 +20,15 @@ import json
 import logging
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from prospector.data.ingest.kalshi.incremental import pull_incremental
 from prospector.kalshi.client import KalshiClient
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = REPO_ROOT / "data" / "kalshi"
+
+load_dotenv(REPO_ROOT / ".env")
 DEFAULT_SERIES = [
     "KXBTC", "KXBTCD", "KXETH", "KXETHD",
     "KXMVENFL", "KXMVENBA", "KXMVESPORTS",

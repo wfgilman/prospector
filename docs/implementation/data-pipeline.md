@@ -287,6 +287,55 @@ Expected behavior: for each series, the log will show an "endpoint split" summar
 
 ---
 
+## 12. TrevorJS migration into the in-house tree (2026-04-23)
+
+### 12.1 Why migrate instead of re-backfill
+
+Kicked off the full `/historical/*` backfill after the §11 pass, stopped it after ~3 hours on realism grounds: at the observed rate (~100 req/min, 0.3s sleep per call), the full default-series backfill would take 1–2 weeks of wall-clock. Since the /historical/* endpoint already validated as byte-for-byte equivalent to TrevorJS, re-pulling the same data via the live endpoint was wasted work.
+
+Schema extension required first: TrevorJS carries `yes_sub_title` / `no_sub_title` / `volume_24h`, and PM Underwriting's calibration pipeline relies on `yes_sub_title` (strike-range text like "$84,250 to 84,749.99") for strike parsing. Our `Market` dataclass pre-this-commit dropped those fields. Added to dataclass + `_parse_market` + `markets_to_frame` + all test fixtures (PM + ingest).
+
+### 12.2 Migration
+
+Script: `scripts/migrate_trevorjs.py`. Reads `data/kalshi_hf/{markets,trades}-*.parquet`, transforms (cents→[0,1] prices; `ticker`→`event_ticker` join for trades; derive `series_ticker` from event_ticker prefix), writes to the existing partitioned tree at `data/kalshi/{markets,trades}/date=YYYY-MM-DD/part.parquet`. Uses the same `writer.write_{markets,trades}` path as the live ingest — inherits the trade_id dedup + per-(ticker, date) markets collapse.
+
+Wall time:
+- Markets: 17,464,713 rows → 1,665 date partitions, ~10 min
+- Trades: 154,505,005 rows → 1,674 date partitions, ~16.5 min
+- Total: ~27 min
+
+### 12.3 Post-migration verification
+
+| Surface | In-house | TrevorJS | Delta | Interpretation |
+|---|---|---|---|---|
+| Trades rows | 154,571,739 | 154,505,005 | +66,734 | Matches the 66,734 KXBTC trades we pulled via `/historical/*` before stopping the backfill |
+| Tickers | 3,490,022 | 3,486,705 | +3,317 | Same pattern — historical pull added 3,317 recent KXBTC tickers |
+| Events | 1,598,516 | — | — | Unique event_tickers over 5 years (hourly BTC + sports + weather + etc.) |
+| Date range | 2021-06-30 → 2026-04-23 | 2021-06-30 → 2026-01-28 | +3 months forward | Our `/historical/*` pulls bridged the Jan-28 → Apr-23 gap |
+| Markets rows | 17,490,001 | 17,464,713 | +25,288 | Historical-pull markets snapshot from yesterday |
+
+### 12.4 One fix-up on the markets side
+
+Yesterday's partial backfill wrote the `date=2026-04-23` markets partition with the OLD schema (no `yes_sub_title` / `no_sub_title` / `volume_24h`). Migration added those fields to the other 1,665 partitions but left the one old partition behind, causing a schema-mismatch error on full-glob reads. Retrofitted in-place by reading the partition, adding the missing columns with empty-string/zero defaults, and rewriting. Cleanly resolved; all 1,666 markets partitions now share the same schema.
+
+### 12.5 Current state
+
+- **Historical archive** (Jun 2021 → Jan 2026): TrevorJS data, now in our schema at `data/kalshi/`
+- **Recent period** (Feb 2026 → Apr 2026): `/historical/*` pulls, same tree
+- **Ongoing**: incremental pull via `scripts/pull_kalshi_incremental.py` (live endpoint) extends forward
+
+Downstream scripts that previously read `data/kalshi_hf/*.parquet` can now read `data/kalshi/{markets,trades}/date=*/part.parquet` and get the unified view. `data/kalshi_hf/` (5.3 GB) is redundant — **safe to delete** if disk pressure warrants it, or keep as belt-and-suspenders for a week before removal.
+
+### 12.6 Disk usage
+
+```
+data/kalshi/trades/    (migrated + /historical/* pulls)
+data/kalshi/markets/   (migrated + /historical/* pulls)
+data/kalshi_hf/        (TrevorJS — now redundant, 5.3 GB)
+```
+
+---
+
 ## 10. Kalshi retention discovery — revised strategy (2026-04-22)
 
 ### 10.1 What we found

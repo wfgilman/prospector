@@ -136,6 +136,18 @@ Validates that the calibrated edge exists in live markets and that orders can be
 - Observed win rate within 5pp of calibration prediction
 - No single-day drawdown > 5% of NAV
 
+### Expiry screen + shadow ledger (added 2026-04-23)
+
+The scanner surfaces candidates regardless of how far out the market resolves. A paper-trade validation run has a narrow signal horizon — positions resolving 6+ months out return no information within the paper window, so they crowd out the book without contributing to validation.
+
+**Screen:** `RunnerConfig.max_days_to_close` (default 28 days) rejects candidates where `close_time - now > max_days_to_close`. Paper-book entries land only on markets that will resolve inside the validation horizon.
+
+**Shadow ledger:** Every rejection writes full candidate metadata — ticker, event, category, side, entry_price, edge_pp, σ_bin, the risk_budget the sizer would have assigned, close_time, entry_time, reject_reason — to `data/paper/pm_underwriting/shadow/shadow_rejections.parquet`. Deduped on (ticker, reject_date), first-seen-per-day wins.
+
+A downstream reconstruction script (not yet built) can replay these rows against a shadow PaperPortfolio to produce the counterfactual "what if we didn't screen" book. Expected cost: ~150 LOC, consumes the same calibration + sizer configs.
+
+CLI flag: `--max-days-to-close 28` (set to `0` to disable the screen entirely). Source: `src/prospector/strategies/pm_underwriting/{runner,shadow}.py`.
+
 ---
 
 ## Phase 3.5 — Sizing Reevaluation (Complete, 2026-04-21)

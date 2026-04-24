@@ -56,6 +56,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--max-bin-frac", type=float, default=0.15)
     p.add_argument("--min-edge-pp", type=float, default=5.0)
     p.add_argument(
+        "--max-days-to-close",
+        type=int,
+        default=28,
+        help=(
+            "Reject markets resolving more than this many days out. Their "
+            "metadata is logged to the shadow ledger for counterfactual "
+            "replay. 0 to disable."
+        ),
+    )
+    p.add_argument(
         "--categories",
         nargs="*",
         default=["sports", "crypto"],
@@ -77,9 +87,13 @@ def main(argv: list[str] | None = None) -> int:
     sigma_table = load_sigma_table(args.sigma_table)
 
     categories = None if args.categories == ["all"] else tuple(args.categories)
+    # Shadow ledger lives next to the portfolio DB (parent of DB file).
+    shadow_root = args.portfolio_db.parent
     runner_cfg = RunnerConfig(
         min_edge_pp=args.min_edge_pp,
         categories=categories,
+        max_days_to_close=args.max_days_to_close or None,
+        shadow_ledger_root=shadow_root,
     )
     portfolio_cfg = PortfolioConfig(
         initial_nav=args.initial_nav,
@@ -96,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
             report = run_once(client, portfolio, calibration, sigma_table, runner_cfg)
             print(
                 f"entered={report.entered} rejected={report.rejected} "
+                f"shadow={report.shadow_rejected} "
                 f"candidates={report.candidates_seen} "
                 f"resolved={report.monitor.resolved} voided={report.monitor.voided}"
             )

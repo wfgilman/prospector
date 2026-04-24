@@ -29,9 +29,10 @@ from datetime import datetime, timezone
 import httpx
 
 EXCHANGE_URL = "https://api.exchange.coinbase.com"
-_TIMEOUT = 30.0
-_MAX_CANDLES_PER_REQUEST = 300  # Coinbase cap
+_TIMEOUT = 60.0                  # generous — Coinbase occasionally stalls 20-30s
+_MAX_CANDLES_PER_REQUEST = 300   # Coinbase cap
 _MIN_SLEEP_S = 0.5
+_MAX_RETRIES = 3
 
 
 class CoinbaseClient:
@@ -76,10 +77,20 @@ class CoinbaseClient:
             "start": start.isoformat().replace("+00:00", "Z"),
             "end": end.isoformat().replace("+00:00", "Z"),
         }
-        r = self._http.get(f"/products/{product_id}/candles", params=params)
-        r.raise_for_status()
-        data = r.json()
-        if not isinstance(data, list):
-            raise ValueError(f"Unexpected candles response: {data}")
-        time.sleep(_MIN_SLEEP_S)
-        return data
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                r = self._http.get(f"/products/{product_id}/candles", params=params)
+                r.raise_for_status()
+                data = r.json()
+                if not isinstance(data, list):
+                    raise ValueError(f"Unexpected candles response: {data}")
+                time.sleep(_MIN_SLEEP_S)
+                return data
+            except (httpx.HTTPError, httpx.TimeoutException, ValueError) as e:
+                last_exc = e
+                if attempt + 1 < _MAX_RETRIES:
+                    time.sleep(2 ** attempt)
+        raise RuntimeError(
+            f"Coinbase candles failed after {_MAX_RETRIES} attempts"
+        ) from last_exc

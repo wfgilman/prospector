@@ -1,29 +1,24 @@
-"""Phase 1 event study for strategy #4 (Kalshi × crypto narrative spread).
+"""Event study for strategy #4 (Kalshi × crypto narrative spread).
 
-Tests whether hourly changes in the Kalshi Fed-rate-implied expected rate
-lead hourly BTC/ETH returns. Hyperparameters locked per §12 of the #4
-deep-dive — do not expose as CLI flags.
+Phase 1 (2026-04-22): hourly granularity; failed all four pre-registered
+criteria. Verdict was data-granularity-limited, not thesis-falsifying —
+Hyperliquid 1h couldn't resolve the 10–60 min transmission lag the
+thesis hypothesized.
 
-Pipeline:
-  1. Identify FED-YY{SEP,OCT,DEC,JAN} rate-threshold events in window.
-  2. Parse strike from yes_sub_title (e.g., "Above 4.00%" -> 4.00).
-  3. ASOF-join trades onto a 1h snapshot grid per event to recover yes_price
-     at each hour ∈ [close_time - 30d, close_time].
-  4. Reconstruct per-hour implied expected rate = Σ bucket_prob · midpoint.
-  5. Compute Δ(implied_rate) per hour.
-  6. Join with BTC_PERP / ETH_PERP 1h returns, using lag of 1h
-     (BTC return [t, t+1h] regressed on ΔP at [t-1h, t]).
-  7. Train/test split: train = FED-25SEP + FED-25OCT + FED-25DEC; test =
-     KXFED-26JAN. Test fold run once.
-  8. Null shuffle on test: permute ΔP vs. return pairing.
+Phase 3 (2026-04-23): 15-minute granularity on Coinbase 1m candles.
+- Kalshi: unified tree (data/kalshi/), prices already [0, 1].
+- Crypto: Coinbase BTC-USD / ETH-USD 1m. Hyperliquid can't provide
+  historical 1m (3-day retention); Coinbase's global BTC price tracks
+  Hyperliquid's perp at >0.99 correlation on sub-hour bars.
 
-Pass criteria (pre-registered, §12.3.4):
-  (a) |t-stat β| > 3.0 on test fold lagged regression
-  (b) R² > 0.002
-  (c) Sign matches directional prior (negative — dovish ΔP -> positive BTC)
-  (d) |null t-stat| < (1/3) · |real t-stat|
-
-Output: `data/fomc/event_study.parquet` + summary text file.
+Pre-registration for Phase 3 (refinements over Phase 1 §12 re-locked
+before running, not after seeing data):
+  - SNAPSHOT_CADENCE_MINUTES = 15 (finer than Phase 1's 1h)
+  - LAG_MINUTES = 15 (matches cadence; sub-hour per thesis §1)
+  - Event split unchanged: train = FED-25SEP/OCT/DEC, test = KXFED-26JAN
+  - Pass criteria unchanged: |t| > 3, R² > 0.002, sign negative,
+    null/real t-stat ratio < 1/3
+  - Source: data/kalshi/ unified tree + data/coinbase/{BTC,ETH}-USD/1m.parquet
 """
 
 from __future__ import annotations
@@ -35,17 +30,17 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-# --- Pre-registered hyperparameters (see §12) ---------------------------------
+# --- Pre-registered hyperparameters (§12 + Phase 3 refinements) ---------------
 TRAIN_EVENTS = ("FED-25SEP", "FED-25OCT", "FED-25DEC")
 TEST_EVENTS = ("KXFED-26JAN",)
-COINS = ("BTC_PERP", "ETH_PERP")
+COINS = ("BTC-USD", "ETH-USD")
 
 PRE_MEETING_DAYS = 30
-SNAPSHOT_CADENCE_HOURS = 1          # matches OHLCV granularity
-LAG_HOURS = 1                       # BTC return over [t, t+1h] vs. ΔP at [t-1h, t]
+SNAPSHOT_CADENCE_MINUTES = 15       # Phase 3: finer than original 1h
+LAG_MINUTES = 15                    # BTC return over [t, t+15m] vs. ΔP at [t-15m, t]
 MIN_LADDER_COMPLETENESS = 0.75
 
-# Pass criteria
+# Pass criteria (same as Phase 1)
 MIN_ABS_T_STAT = 3.0
 MIN_R2 = 0.002
 EXPECTED_BETA_SIGN = -1.0           # dovish (rate falling) -> BTC up
@@ -55,8 +50,8 @@ NULL_SHUFFLE_SEED = 20260422
 # --------------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-HF_DIR = REPO_ROOT / "data" / "kalshi_hf"
-OHLCV_DIR = REPO_ROOT / "data" / "ohlcv"
+KALSHI_DIR = REPO_ROOT / "data" / "kalshi"
+COINBASE_DIR = REPO_ROOT / "data" / "coinbase"
 OUT_DIR = REPO_ROOT / "data" / "fomc"
 
 STRIKE_RE = re.compile(r"Above\s+(\d+(?:\.\d+)?)\s*%")
@@ -66,8 +61,8 @@ def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
 
-    markets_glob = str(HF_DIR / "markets-*.parquet")
-    trades_glob = str(HF_DIR / "trades-*.parquet")
+    markets_glob = str(KALSHI_DIR / "markets" / "date=*" / "part.parquet")
+    trades_glob = str(KALSHI_DIR / "trades" / "date=*" / "part.parquet")
     all_events = TRAIN_EVENTS + TEST_EVENTS
     events_sql_list = ", ".join(f"'{e}'" for e in all_events)
 
@@ -107,9 +102,10 @@ def main() -> None:
           f"{rows['strike_pct'].min():.2f}% – {rows['strike_pct'].max():.2f}%")
     con.register("fed_markets_parsed", rows)
 
-    print(f"[3/6] generating 1h snapshot grid and ASOF-joining trades "
-          f"(last {PRE_MEETING_DAYS}d per event)...")
-    # Snapshots on hour boundaries so they align with OHLCV timestamps.
+    print(f"[3/6] generating {SNAPSHOT_CADENCE_MINUTES}-min snapshot grid and "
+          f"ASOF-joining trades (last {PRE_MEETING_DAYS}d per event)...")
+    # Snapshots aligned to clean 15-min boundaries so Coinbase 1m aggregation
+    # is unambiguous.
     con.execute(f"""
         CREATE TEMP TABLE snapshots AS
         SELECT
@@ -123,7 +119,7 @@ def main() -> None:
             SELECT unnest(generate_series(
                 date_trunc('hour', f.close_time - INTERVAL '{PRE_MEETING_DAYS}' DAY),
                 date_trunc('hour', f.close_time),
-                INTERVAL '{SNAPSHOT_CADENCE_HOURS}' HOUR
+                INTERVAL '{SNAPSHOT_CADENCE_MINUTES}' MINUTE
             )) AS gs
         )
     """)
@@ -153,7 +149,7 @@ def main() -> None:
     print("[4/6] reconstructing implied expected rate per snapshot...")
     df = con.execute("""
         SELECT event_ticker, snapshot_ts, strike_pct,
-               yes_price / 100.0 AS p_above,
+               yes_price AS p_above,
                close_time
         FROM ladder_raw
         ORDER BY event_ticker, snapshot_ts, strike_pct
@@ -245,16 +241,37 @@ def main() -> None:
     rate_df = rate_df.dropna(subset=["delta_implied_rate"]).reset_index(drop=True)
     print(f"      {len(rate_df):,} hourly Δ-rate observations")
 
-    print("[5/6] joining BTC/ETH returns + lag-1h regression...")
+    print(f"[5/6] joining BTC/ETH {LAG_MINUTES}m returns from Coinbase 1m...")
+    # Coinbase 1m candles → resample to the snapshot cadence (15 min by
+    # default), then shift(-1) on the resampled close for the forward return
+    # over [t, t+LAG_MINUTES]. Anchor to clean 15-min boundaries.
+    resample_rule = f"{SNAPSHOT_CADENCE_MINUTES}min"
     coin_returns: dict[str, pd.DataFrame] = {}
     for coin in COINS:
-        ohlcv = pd.read_parquet(OHLCV_DIR / coin / "1h.parquet")
+        path = COINBASE_DIR / coin / "1m.parquet"
+        if not path.exists():
+            print(f"      WARNING: {path} missing — skipping {coin}")
+            continue
+        ohlcv = pd.read_parquet(path)
         ohlcv["timestamp"] = pd.to_datetime(ohlcv["timestamp"], utc=True)
         ohlcv = ohlcv.sort_values("timestamp").reset_index(drop=True)
-        ohlcv[f"ret_1h_{coin}"] = (
-            ohlcv["close"].shift(-LAG_HOURS) / ohlcv["close"] - 1.0
+        # Resample 1m close to 15m on the left edge (label='left') so the
+        # timestamp aligns with the snapshot boundary (09:00 bar = close at
+        # 09:15, i.e. the price at end of the 09:00-09:15 window).
+        resampled = ohlcv.set_index("timestamp")["close"].resample(
+            resample_rule, label="left", closed="left"
+        ).last().rename(f"close_{coin}").reset_index()
+        resampled["timestamp"] = pd.to_datetime(
+            resampled["timestamp"], utc=True
         )
-        coin_returns[coin] = ohlcv[["timestamp", f"ret_1h_{coin}"]].rename(
+        ret_col = f"ret_{LAG_MINUTES}m_{coin}"
+        # shift(-1) on the resampled series: return over the NEXT bar's
+        # [t, t+LAG_MINUTES] window vs. the current close.
+        resampled[ret_col] = (
+            resampled[f"close_{coin}"].shift(-1) / resampled[f"close_{coin}"]
+            - 1.0
+        )
+        coin_returns[coin] = resampled[["timestamp", ret_col]].rename(
             columns={"timestamp": "snapshot_ts"}
         )
 
@@ -296,7 +313,7 @@ def main() -> None:
 
     results = []
     for coin in COINS:
-        y_col = f"ret_1h_{coin}"
+        y_col = f"ret_{LAG_MINUTES}m_{coin}"
         results.append(_regress(train, y_col, f"train_{coin}"))
         results.append(_regress(test, y_col, f"test_{coin}"))
         # Null shuffle on test
@@ -307,7 +324,7 @@ def main() -> None:
 
     # Per-event breakdown on train (full-distribution discipline)
     for coin in COINS:
-        y_col = f"ret_1h_{coin}"
+        y_col = f"ret_{LAG_MINUTES}m_{coin}"
         for event in TRAIN_EVENTS:
             sub = panel[panel["event_ticker"] == event]
             results.append(_regress(sub, y_col, f"per_event_{event}_{coin}"))

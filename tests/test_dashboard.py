@@ -3,10 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from prospector.dashboard import (
-    build_nav_series,
+    _hours_to_expiry,
+    build_pnl_series,
     load_category_breakdown,
     load_portfolio_summary,
     load_positions,
@@ -69,7 +71,7 @@ def test_load_positions_and_summary_after_entry(portfolio: PaperPortfolio) -> No
     assert summary.realized_pnl == 0.0
 
 
-def test_build_nav_series_tracks_realized_pnl(portfolio: PaperPortfolio) -> None:
+def test_build_pnl_series_tracks_realized_pnl(portfolio: PaperPortfolio) -> None:
     portfolio.enter(
         ticker="KXNFL-T1",
         event_ticker="KXNFL-E1-A",
@@ -87,10 +89,16 @@ def test_build_nav_series_tracks_realized_pnl(portfolio: PaperPortfolio) -> None
         close_time=datetime(2026, 4, 21, 13, 0, tzinfo=timezone.utc),
     )
 
-    nav_df = build_nav_series(portfolio.db_path)
-    assert len(nav_df) == 1
-    # Won a sell_yes at 0.9 → payoff above initial NAV, minus round-trip fee.
-    assert nav_df.iloc[0]["nav"] > 10_000.0
+    pnl_df = build_pnl_series(portfolio.db_path)
+    assert len(pnl_df) == 1
+    # Won a sell_yes at 0.9 → positive realized P&L after fees.
+    assert pnl_df.iloc[0]["pnl"] > 0
+
+
+def test_build_pnl_series_empty_anchors_at_zero(portfolio: PaperPortfolio) -> None:
+    pnl_df = build_pnl_series(portfolio.db_path)
+    assert len(pnl_df) == 1
+    assert pnl_df.iloc[0]["pnl"] == 0.0
 
 
 def test_load_tick_history_parses_summary_and_timestamp(tmp_path: Path) -> None:
@@ -124,6 +132,32 @@ def test_load_category_breakdown_missing_db(tmp_path: Path) -> None:
 
 def test_load_category_breakdown_empty(portfolio: PaperPortfolio) -> None:
     assert load_category_breakdown(portfolio.db_path).empty
+
+
+def test_hours_to_expiry_is_numeric_and_sortable() -> None:
+    now = datetime(2026, 4, 23, 12, 0, tzinfo=timezone.utc)
+    expected = pd.Series(
+        [
+            pd.Timestamp(now) + pd.Timedelta(hours=5, minutes=12),
+            pd.Timestamp(now) + pd.Timedelta(days=3, hours=4),
+            pd.Timestamp(now) - pd.Timedelta(minutes=30),
+            pd.NaT,
+        ]
+    )
+
+    hours = _hours_to_expiry(expected, now)
+
+    assert hours.iloc[0] == pytest.approx(5.2)
+    assert hours.iloc[1] == pytest.approx(76.0)
+    assert hours.iloc[2] == pytest.approx(-0.5)
+    assert pd.isna(hours.iloc[3])
+    # Crucially, sorting the numeric series orders by duration — not by
+    # the lexicographic ordering a preformatted string ("3d 4h" vs "5h 12m")
+    # would have produced.
+    sorted_vals = hours.dropna().sort_values().tolist()
+    assert sorted_vals == sorted(sorted_vals)
+    assert sorted_vals[0] == pytest.approx(-0.5)
+    assert sorted_vals[-1] == pytest.approx(76.0)
 
 
 def test_load_category_breakdown_mixed_positions(portfolio: PaperPortfolio) -> None:

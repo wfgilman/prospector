@@ -258,3 +258,89 @@ def test_run_once_respects_diversity_caps_by_default(tmp_path, calibration, sigm
     with PaperPortfolio(tmp_path / "strict.db", cfg) as p:
         report = run_once(client, p, calibration, sigma_table)
         assert report.entered == 1
+
+
+def _mkt_with_close(ticker: str, close_time: datetime) -> Market:
+    m = _mkt(ticker, event_ticker="KXNFL-E1")
+    # Market dataclass is frozen; build a fresh one with the close_time
+    # overridden.
+    return Market(**{**m.__dict__, "close_time": close_time})
+
+
+def test_expiry_screen_rejects_long_dated_markets(
+    tmp_path, portfolio, calibration, sigma_table
+):
+    """Markets resolving more than max_days_to_close days out get shadow-
+    rejected instead of entered; their metadata lands in the shadow
+    parquet for counterfactual replay."""
+    now = datetime(2026, 4, 23, 10, 0, tzinfo=timezone.utc)
+    long_dated_close = datetime(2027, 3, 1, tzinfo=timezone.utc)   # 10+ months out
+    short_dated_close = datetime(2026, 5, 1, tzinfo=timezone.utc)  # 8 days out
+
+    markets = [
+        _mkt_with_close("LONG", long_dated_close),
+        _mkt_with_close("SHORT", short_dated_close),
+    ]
+    obs = {m.ticker: _ob(yes=[(0.82, 500)], no=[(0.17, 500)]) for m in markets}
+    client = FakeClient(markets, obs)
+
+    shadow_root = tmp_path / "shadow_root"
+    config = RunnerConfig(max_days_to_close=28, shadow_ledger_root=shadow_root)
+    report = run_once(client, portfolio, calibration, sigma_table, config, now=now)
+
+    assert report.entered == 1  # only SHORT
+    assert report.shadow_rejected == 1  # LONG
+    # LONG should be absent from the portfolio
+    assert not portfolio.has_open_position("LONG")
+    assert portfolio.has_open_position("SHORT")
+
+    # Shadow parquet should have exactly one row for LONG.
+    shadow_path = shadow_root / "shadow" / "shadow_rejections.parquet"
+    assert shadow_path.exists()
+    import pandas as pd
+    df = pd.read_parquet(shadow_path)
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["ticker"] == "LONG"
+    assert row["reject_reason"] == "expiry_gt_28d"
+    assert row["edge_pp"] > 0
+    assert row["sigma_bin"] > 0
+    assert row["risk_budget"] > 0
+
+
+def test_expiry_screen_disabled_when_max_days_is_none(
+    tmp_path, portfolio, calibration, sigma_table
+):
+    """max_days_to_close=None disables the screen entirely — long-dated
+    markets enter just like short-dated ones."""
+    now = datetime(2026, 4, 23, 10, 0, tzinfo=timezone.utc)
+    long_dated_close = datetime(2027, 3, 1, tzinfo=timezone.utc)
+    market = _mkt_with_close("LONG", long_dated_close)
+    client = FakeClient(
+        [market], {"LONG": _ob(yes=[(0.82, 500)], no=[(0.17, 500)])}
+    )
+    config = RunnerConfig(
+        max_days_to_close=None,
+        shadow_ledger_root=tmp_path,
+    )
+    report = run_once(client, portfolio, calibration, sigma_table, config, now=now)
+    assert report.entered == 1
+    assert report.shadow_rejected == 0
+    assert portfolio.has_open_position("LONG")
+
+
+def test_expiry_screen_no_shadow_root_means_no_parquet(
+    tmp_path, portfolio, calibration, sigma_table
+):
+    """If shadow_ledger_root is None, the screen still applies but nothing
+    is written to disk (useful for unit tests)."""
+    now = datetime(2026, 4, 23, 10, 0, tzinfo=timezone.utc)
+    long_dated_close = datetime(2027, 3, 1, tzinfo=timezone.utc)
+    market = _mkt_with_close("LONG", long_dated_close)
+    client = FakeClient(
+        [market], {"LONG": _ob(yes=[(0.82, 500)], no=[(0.17, 500)])}
+    )
+    config = RunnerConfig(max_days_to_close=28, shadow_ledger_root=None)
+    report = run_once(client, portfolio, calibration, sigma_table, config, now=now)
+    assert report.shadow_rejected == 1
+    assert not portfolio.has_open_position("LONG")

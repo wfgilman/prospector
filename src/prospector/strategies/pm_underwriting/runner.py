@@ -22,7 +22,8 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Iterable
 
 from prospector.kalshi import KalshiClient
@@ -30,6 +31,7 @@ from prospector.strategies.pm_underwriting.calibration import Calibration
 from prospector.strategies.pm_underwriting.monitor import MonitorReport, sweep
 from prospector.strategies.pm_underwriting.portfolio import PaperPortfolio, RejectedEntry
 from prospector.strategies.pm_underwriting.scanner import Candidate, scan
+from prospector.strategies.pm_underwriting.shadow import ShadowRejection, write_rejections
 from prospector.strategies.pm_underwriting.sizing import MissingSigma, SigmaTable
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,13 @@ class RunnerConfig:
     categories: tuple[str, ...] | None = ("sports", "crypto")
     orderbook_depth: int = 1
     max_candidates_per_tick: int = 200
+    # Paper-trade validation horizon: markets resolving more than this many
+    # days out don't return signal in time to validate the strategy. Rejected
+    # candidates are written to the shadow ledger so we can reconstruct the
+    # counterfactual portfolio (what if we didn't screen) post-hoc.
+    max_days_to_close: int = 28
+    # Where shadow rejections are written. Usually the paper-portfolio root.
+    shadow_ledger_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +58,7 @@ class TickReport:
     candidates_seen: int
     entered: int
     rejected: int
+    shadow_rejected: int         # rejected on max_days_to_close (logged to shadow ledger)
     tick_time: datetime
 
 
@@ -83,6 +93,7 @@ def run_once(
             candidates_seen=0,
             entered=0,
             rejected=0,
+            shadow_rejected=0,
             tick_time=now,
         )
 
@@ -110,12 +121,51 @@ def run_once(
         sized.append((candidate, entry.sigma))
     sized.sort(key=lambda cs: cs[0].edge_pp / cs[1] if cs[1] > 0 else 0.0, reverse=True)
 
-    entered = rejected = 0
+    max_close_time = None
+    if config.max_days_to_close is not None:
+        max_close_time = now + timedelta(days=config.max_days_to_close)
+
+    entered = rejected = shadow_rejected = 0
+    shadow_rows: list[ShadowRejection] = []
     for candidate, sigma_i in sized:
         if entered >= remaining_today:
             break
         if portfolio.has_open_position(candidate.market.ticker):
             continue
+
+        # Structural expiry screen: reject markets resolving past the
+        # paper-trade validation horizon, but record full metadata so a
+        # downstream shadow-portfolio reconstruction can replay them.
+        if (
+            max_close_time is not None
+            and candidate.market.close_time is not None
+            and candidate.market.close_time > max_close_time
+        ):
+            would_be_risk = portfolio.size_position(sigma_i=sigma_i)
+            shadow_rows.append(ShadowRejection(
+                ticker=candidate.market.ticker,
+                event_ticker=candidate.market.event_ticker,
+                series_ticker=candidate.market.series_ticker or "",
+                category=candidate.category,
+                side=candidate.side,
+                entry_price=candidate.entry_price,
+                edge_pp=candidate.edge_pp,
+                sigma_bin=sigma_i,
+                risk_budget=would_be_risk,
+                close_time=candidate.market.close_time,
+                entry_time=now,
+                reject_reason=f"expiry_gt_{config.max_days_to_close}d",
+            ))
+            shadow_rejected += 1
+            logger.debug(
+                "SHADOW %s close=%s edge=%.2fpp (> %dd horizon)",
+                candidate.market.ticker,
+                candidate.market.close_time,
+                candidate.edge_pp,
+                config.max_days_to_close,
+            )
+            continue
+
         risk_budget = portfolio.size_position(sigma_i=sigma_i)
         if risk_budget <= 0:
             continue
@@ -146,12 +196,20 @@ def run_once(
             rejected += 1
             logger.debug("skip %s: %s", candidate.market.ticker, exc)
 
+    if shadow_rows and config.shadow_ledger_root is not None:
+        write_rejections(shadow_rows, config.shadow_ledger_root)
+        logger.info(
+            "shadow: logged %d expiry-screened candidates to %s",
+            len(shadow_rows), config.shadow_ledger_root,
+        )
+
     portfolio.snapshot_today(now.date())
     return TickReport(
         monitor=monitor_report,
         candidates_seen=len(candidates),
         entered=entered,
         rejected=rejected,
+        shadow_rejected=shadow_rejected,
         tick_time=now,
     )
 

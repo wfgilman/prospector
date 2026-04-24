@@ -201,15 +201,11 @@ def load_category_breakdown(db_path: Path) -> pd.DataFrame:
     return df
 
 
-def build_nav_series(db_path: Path) -> pd.DataFrame:
-    """NAV trajectory derived from resolved positions + initial NAV."""
+def build_pnl_series(db_path: Path) -> pd.DataFrame:
+    """Cumulative realized P&L trajectory, anchored at 0 before the first close."""
     if not db_path.exists():
-        return pd.DataFrame(columns=["time", "nav"])
+        return pd.DataFrame(columns=["time", "pnl"])
     with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-        meta = conn.execute(
-            "SELECT value FROM meta WHERE key = 'initial_nav'"
-        ).fetchone()
-        initial_nav = float(meta[0]) if meta else 0.0
         closed = pd.read_sql_query(
             "SELECT close_time, realized_pnl FROM positions "
             "WHERE status = 'closed' AND close_time IS NOT NULL "
@@ -218,11 +214,11 @@ def build_nav_series(db_path: Path) -> pd.DataFrame:
         )
     if closed.empty:
         return pd.DataFrame(
-            [{"time": datetime.now(timezone.utc), "nav": initial_nav}]
+            [{"time": datetime.now(timezone.utc), "pnl": 0.0}]
         )
     closed["close_time"] = pd.to_datetime(closed["close_time"], utc=True)
-    closed["nav"] = initial_nav + closed["realized_pnl"].cumsum()
-    return closed.rename(columns={"close_time": "time"})[["time", "nav"]]
+    closed["pnl"] = closed["realized_pnl"].cumsum()
+    return closed.rename(columns={"close_time": "time"})[["time", "pnl"]]
 
 
 # -- theme ------------------------------------------------------------------
@@ -569,10 +565,9 @@ def _render_kalshi_binary(entry: StrategyEntry) -> None:
         return
 
     _render_stat_card(entry, summary)
-    _render_nav(entry.portfolio_db)
+    _render_pnl(entry.portfolio_db)
     _render_category_sections(entry.portfolio_db)
-    _render_concentration(entry.portfolio_db, summary)
-    _render_tick_stream(entry.log_dir)
+    _render_positions_tabs(entry.portfolio_db, entry.log_dir)
 
 
 def _render_stat_card(entry: StrategyEntry, summary: PortfolioSummary) -> None:
@@ -643,35 +638,55 @@ def _render_stat_card(entry: StrategyEntry, summary: PortfolioSummary) -> None:
     )
 
 
-def _render_nav(db_path: Path) -> None:
+def _render_pnl(db_path: Path) -> None:
     import altair as alt
     import streamlit as st
 
-    nav_df = build_nav_series(db_path)
+    pnl_df = build_pnl_series(db_path)
     st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
     st.markdown(
-        '<div class="qt-eyebrow">NAV trajectory</div>',
+        '<div class="qt-eyebrow">P&amp;L trajectory</div>',
         unsafe_allow_html=True,
     )
-    if len(nav_df) >= 2:
-        line = (
-            alt.Chart(nav_df)
-            .mark_line(
-                color=_PALETTE["accent"], strokeWidth=1.75, interpolate="monotone"
+    if len(pnl_df) >= 2:
+        # Clip into two series so each filled area stays on its own side
+        # of y=0. Altair's `mark_area(line=...)` draws an outline along the
+        # top edge, which gives us per-sign line coloring for free.
+        plot_df = pnl_df.copy()
+        plot_df["pos"] = plot_df["pnl"].clip(lower=0)
+        plot_df["neg"] = plot_df["pnl"].clip(upper=0)
+        area_pos = (
+            alt.Chart(plot_df)
+            .mark_area(
+                opacity=0.3,
+                color=_PALETTE["accent"],
+                interpolate="monotone",
+                line={"color": _PALETTE["accent"], "strokeWidth": 1.75},
             )
             .encode(
                 x=alt.X("time:T", title=None),
-                y=alt.Y("nav:Q", title="NAV ($)", scale=alt.Scale(zero=False)),
+                y=alt.Y("pos:Q", title="Realized P&L ($)"),
             )
         )
-        area = (
-            alt.Chart(nav_df)
+        area_neg = (
+            alt.Chart(plot_df)
             .mark_area(
-                opacity=0.15, color=_PALETTE["accent"], interpolate="monotone"
+                opacity=0.3,
+                color=_PALETTE["loss"],
+                interpolate="monotone",
+                line={"color": _PALETTE["loss"], "strokeWidth": 1.75},
             )
-            .encode(x="time:T", y=alt.Y("nav:Q", scale=alt.Scale(zero=False)))
+            .encode(x="time:T", y=alt.Y("neg:Q"))
         )
-        st.altair_chart((area + line).properties(height=180), width="stretch")
+        zero_rule = (
+            alt.Chart(pd.DataFrame({"y": [0]}))
+            .mark_rule(color=_PALETTE["border"], strokeDash=[2, 3])
+            .encode(y="y:Q")
+        )
+        st.altair_chart(
+            (area_pos + area_neg + zero_rule).properties(height=180),
+            width="stretch",
+        )
     else:
         st.caption("Trajectory will render after the first resolution.")
 
@@ -681,23 +696,22 @@ def _render_category_sections(db_path: Path) -> None:
 
     st.markdown("<div style='height:2rem;'></div>", unsafe_allow_html=True)
     st.markdown(
-        '<div class="qt-eyebrow">Open positions by category</div>',
+        '<div class="qt-eyebrow">By category</div>',
         unsafe_allow_html=True,
     )
 
     breakdown = load_category_breakdown(db_path)
-    open_df = load_positions(db_path, status="open")
-    if breakdown.empty or open_df.empty:
-        st.caption("No open positions.")
+    if breakdown.empty:
+        st.caption("No category activity.")
         return
 
     for _, row in breakdown.iterrows():
         if row["open_count"] == 0 and row["closed_count"] == 0:
             continue
-        _render_category_block(row, open_df)
+        _render_category_head(row)
 
 
-def _render_category_block(row: pd.Series, open_df: pd.DataFrame) -> None:
+def _render_category_head(row: pd.Series) -> None:
     import streamlit as st
 
     cat = row["category"]
@@ -706,9 +720,7 @@ def _render_category_block(row: pd.Series, open_df: pd.DataFrame) -> None:
     wins, losses = int(row["wins"]), int(row["losses"])
     record = f"{wins}W / {losses}L" if (wins + losses) > 0 else "—"
     avg_edge = row["avg_edge_pp"]
-    avg_edge_str = (
-        f"+{avg_edge:.2f}pp" if pd.notna(avg_edge) else "—"
-    )
+    avg_edge_str = f"+{avg_edge:.2f}pp" if pd.notna(avg_edge) else "—"
 
     st.markdown(
         f"""
@@ -745,17 +757,48 @@ def _render_category_block(row: pd.Series, open_df: pd.DataFrame) -> None:
         unsafe_allow_html=True,
     )
 
-    cat_positions = open_df[open_df["category"] == cat]
-    if cat_positions.empty:
-        st.caption(
-            f"No open positions in {cat}. "
-            "(Resolved history shown above.)"
-        )
+
+def _hours_to_expiry(
+    expected_close: pd.Series, now: datetime
+) -> pd.Series:
+    """Return hours until ``expected_close`` as a float Series.
+
+    Kept numeric (rather than pre-formatted) so ``st.dataframe`` can sort
+    the column by duration instead of lexicographically by string. NaT
+    inputs propagate to NaN so Streamlit renders them as blank and sorts
+    them to the end.
+    """
+    expected = pd.to_datetime(expected_close, utc=True)
+    delta = expected - pd.Timestamp(now)
+    return delta.dt.total_seconds() / 3600.0
+
+
+def _render_positions_tabs(db_path: Path, log_dir: Path) -> None:
+    import streamlit as st
+
+    st.markdown("<div style='height:2rem;'></div>", unsafe_allow_html=True)
+    tab_open, tab_closed, tab_ticks = st.tabs(
+        ["Open positions", "Closed positions", "Recent ticks"]
+    )
+    with tab_open:
+        _render_open_positions(db_path)
+    with tab_closed:
+        _render_closed_positions(db_path)
+    with tab_ticks:
+        _render_tick_stream(log_dir)
+
+
+def _render_open_positions(db_path: Path) -> None:
+    import streamlit as st
+
+    open_df = load_positions(db_path, status="open")
+    if open_df.empty:
+        st.caption("No open positions.")
         return
 
     display_cols = [
         "ticker",
-        "event_ticker",
+        "category",
         "side",
         "entry_price",
         "edge_pp",
@@ -765,21 +808,86 @@ def _render_category_block(row: pd.Series, open_df: pd.DataFrame) -> None:
         "entry_time",
         "expected_close_time",
     ]
-    display_df = cat_positions[display_cols].copy()
+    display_df = open_df[display_cols].copy()
     display_df["entry_time"] = display_df["entry_time"].dt.strftime("%m-%d %H:%M")
-    display_df["expected_close_time"] = (
-        display_df["expected_close_time"]
-        .dt.strftime("%m-%d %H:%M")
-        .fillna("—")
+    now = datetime.now(timezone.utc)
+    # Keep expiry as a numeric column so Streamlit sorts by duration, not
+    # by a preformatted string. NumberColumn's printf format appends the
+    # unit suffix so the display still reads like "3.2 h".
+    display_df["hours_to_expiry"] = _hours_to_expiry(
+        display_df["expected_close_time"], now
     )
-    display_df = display_df.rename(columns={"expected_close_time": "expires"})
+    display_df = display_df.drop(columns=["expected_close_time"])
+    st.dataframe(
+        display_df,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "entry_price": st.column_config.NumberColumn(format="%.3f"),
+            "edge_pp": st.column_config.NumberColumn(format="%+.1f"),
+            "risk_budget": st.column_config.NumberColumn(format="$%.2f"),
+            "reward_potential": st.column_config.NumberColumn(format="$%.2f"),
+            "hours_to_expiry": st.column_config.NumberColumn(
+                "time to expiry", format="%.1f h"
+            ),
+        },
+    )
+
+
+def _render_closed_positions(db_path: Path) -> None:
+    import streamlit as st
+
+    closed_df = load_positions(db_path, status="closed")
+    if closed_df.empty:
+        st.caption("No closed positions yet.")
+        return
+
+    total_pnl = float(closed_df["realized_pnl"].sum())
+    wins = int((closed_df["realized_pnl"] > 0).sum())
+    losses = int((closed_df["realized_pnl"] <= 0).sum())
+    pnl_cls = "up" if total_pnl > 0 else ("down" if total_pnl < 0 else "flat")
+    st.markdown(
+        f"""
+        <div style="display:flex; gap:2rem; margin-bottom:0.75rem;">
+            <div class="qt-cat-stat">
+                <div class="qt-cat-stat-label">Closed</div>
+                <div class="qt-cat-stat-value">{len(closed_df)}</div>
+            </div>
+            <div class="qt-cat-stat">
+                <div class="qt-cat-stat-label">Record</div>
+                <div class="qt-cat-stat-value">{wins}W / {losses}L</div>
+            </div>
+            <div class="qt-cat-stat">
+                <div class="qt-cat-stat-label">Total Realized P&amp;L</div>
+                <div class="qt-cat-stat-value {pnl_cls}">${total_pnl:+,.2f}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    display_cols = [
+        "ticker",
+        "category",
+        "side",
+        "entry_price",
+        "close_price",
+        "contracts",
+        "entry_time",
+        "close_time",
+        "market_result",
+        "realized_pnl",
+    ]
+    display_df = closed_df[display_cols].copy()
+    display_df = display_df.sort_values("close_time", ascending=False)
+    display_df["entry_time"] = display_df["entry_time"].dt.strftime("%m-%d %H:%M")
+    display_df["close_time"] = display_df["close_time"].dt.strftime("%m-%d %H:%M")
     st.dataframe(
         display_df.style.format(
             {
                 "entry_price": "{:.3f}",
-                "edge_pp": "{:+.1f}",
-                "risk_budget": "${:.2f}",
-                "reward_potential": "${:.2f}",
+                "close_price": "{:.3f}",
+                "realized_pnl": "${:+,.2f}",
             }
         ),
         width="stretch",
@@ -787,79 +895,9 @@ def _render_category_block(row: pd.Series, open_df: pd.DataFrame) -> None:
     )
 
 
-def _render_concentration(db_path: Path, summary: PortfolioSummary) -> None:
-    import altair as alt
-    import streamlit as st
-
-    open_df = load_positions(db_path, status="open")
-    if open_df.empty:
-        return
-
-    st.markdown("<div style='height:2rem;'></div>", unsafe_allow_html=True)
-    st.markdown(
-        '<div class="qt-eyebrow">Price-bin concentration</div>',
-        unsafe_allow_html=True,
-    )
-
-    conc_df = open_df.copy()
-    conc_df["bin_low"] = (conc_df["entry_price"] * 100 // 5 * 5).astype(int)
-    conc_df["bin_label"] = conc_df["bin_low"].apply(
-        lambda c: f"{c}–{c + 5}¢"
-    )
-    by_bin = (
-        conc_df.groupby(["bin_label", "bin_low", "side"], as_index=False)[
-            "risk_budget"
-        ]
-        .sum()
-        .rename(columns={"risk_budget": "risk"})
-    )
-    bin_cap = summary.nav * 0.15
-
-    chart = (
-        alt.Chart(by_bin)
-        .mark_bar(cornerRadiusEnd=2)
-        .encode(
-            x=alt.X(
-                "bin_label:N",
-                title="Entry-price bin",
-                sort=alt.SortField("bin_low"),
-            ),
-            y=alt.Y("risk:Q", title="Locked risk ($)"),
-            color=alt.Color(
-                "side:N",
-                scale=alt.Scale(
-                    domain=["sell_yes", "buy_yes"],
-                    range=[_PALETTE["accent"], _PALETTE["warn"]],
-                ),
-                legend=alt.Legend(orient="top", title=None),
-            ),
-            tooltip=[
-                alt.Tooltip("bin_label:N", title="bin"),
-                alt.Tooltip("side:N"),
-                alt.Tooltip("risk:Q", format="$,.2f"),
-            ],
-        )
-        .properties(
-            height=200,
-            title=alt.TitleParams(
-                text=f"per-bin cap ≈ ${bin_cap:,.0f}",
-                fontSize=10,
-                color=_PALETTE["text_dim"],
-                font="Geist",
-            ),
-        )
-    )
-    st.altair_chart(chart, width="stretch")
-
-
 def _render_tick_stream(log_dir: Path) -> None:
     import streamlit as st
 
-    st.markdown("<div style='height:2rem;'></div>", unsafe_allow_html=True)
-    st.markdown(
-        '<div class="qt-eyebrow">Recent ticks</div>',
-        unsafe_allow_html=True,
-    )
     ticks = load_tick_history(log_dir, limit=20)
     if not ticks:
         st.caption(f"No tick log entries under {log_dir}.")

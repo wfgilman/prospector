@@ -111,23 +111,41 @@ def download_candles(
         start = now - timedelta(days=lookback_days)
         log.info("%s/%ds: fresh download from %s", product_id, granularity_s, start.isoformat())
 
+    # Flush to disk every FLUSH_EVERY_N_WINDOWS so a terminal error past this
+    # point keeps prior progress. Deduplication on save handles any overlap.
+    FLUSH_EVERY_N_WINDOWS = 100  # ~500h = ~20d of 1m data per flush
     window_size = timedelta(seconds=granularity_s * CANDLES_PER_REQUEST)
-    all_rows: list[list] = []
+    buffer: list[list] = []
+    total_saved = 0
     cur = start
-    while cur < now:
-        end = min(cur + window_size, now)
-        batch = client.candles(product_id, granularity_s, cur, end)
-        if not batch:
-            # Empty response could mean we're past product launch (fresh pull
-            # with absurd lookback) or at the exchange's retention boundary.
-            # Advance the window and keep trying; if we go a full day with no
-            # data, stop.
-            cur = end
-            continue
-        all_rows.extend(batch)
-        cur = end
+    n_windows = 0
 
-    if not all_rows:
+    def _flush() -> None:
+        nonlocal total_saved, buffer
+        if not buffer:
+            return
+        df = _candles_to_df(buffer)
+        _append_and_save(path, df)
+        total_saved += len(df)
+        log.info("%s/%ds: flushed %d candles (cumulative: %d)",
+                 product_id, granularity_s, len(df), total_saved)
+        buffer = []
+
+    try:
+        while cur < now:
+            end = min(cur + window_size, now)
+            batch = client.candles(product_id, granularity_s, cur, end)
+            cur = end
+            n_windows += 1
+            if batch:
+                buffer.extend(batch)
+            if n_windows % FLUSH_EVERY_N_WINDOWS == 0:
+                _flush()
+    finally:
+        # Always flush the tail buffer, even on exception.
+        _flush()
+
+    if total_saved == 0:
         if last is None:
             log.warning("%s/%ds: no candles returned for lookback %d days",
                         product_id, granularity_s, lookback_days)
@@ -135,10 +153,8 @@ def download_candles(
             log.info("%s/%ds: already up to date", product_id, granularity_s)
         return pd.read_parquet(path) if path.exists() else pd.DataFrame()
 
-    new_df = _candles_to_df(all_rows)
-    _append_and_save(path, new_df)
-    log.info("%s/%ds: saved %d candles → %s",
-             product_id, granularity_s, len(new_df), path)
+    log.info("%s/%ds: saved %d total candles → %s",
+             product_id, granularity_s, total_saved, path)
     return pd.read_parquet(path)
 
 

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.prospector.data-incremental</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/wgilman/workspace/prospector/scripts/data_incremental_launchd.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/wgilman/workspace/prospector</string>
+
+    <!-- Daily at 03:00 local. launchd queues a catch-up tick if the Mac
+         was asleep at the scheduled time — important because Hyperliquid's
+         1m candle endpoint caps fetches at ~3 days of history, so going
+         more than 3 days without a run would create a gap. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/wgilman/workspace/prospector/data/incremental/logs/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/wgilman/workspace/prospector/data/incremental/logs/launchd.log</string>
+</dict>
+</plist>

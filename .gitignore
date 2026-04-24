@@ -13,6 +13,8 @@ data/orderbook/
 data/kalshi_hf/
 data/kalshi/
 data/hyperliquid/
+data/coinbase/
+data/incremental/
 data/calibration/
 data/vol_surface/
 data/fomc/

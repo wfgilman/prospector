@@ -21,7 +21,10 @@ import duckdb
 import matplotlib.pyplot as plt
 import numpy as np
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "kalshi_hf"
+# Unified tree (post-TrevorJS-migration). Prices stored as floats in [0, 1];
+# we cast back to int-cents in the trades SQL so downstream code that uses
+# `pit_price / 100` + 0-100-scale bins doesn't need changes.
+DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "kalshi"
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "data" / "calibration"
 
 BIN_EDGES = list(range(0, 101, 5))  # 0, 5, 10, ..., 95, 100 → 20 bins
@@ -74,7 +77,7 @@ def compute_pit_prices(con: duckdb.DuckDBPyConnection, data_dir: Path, min_volum
             close_time,
             open_time + (close_time - open_time) / 2 AS pit_time,
             {CATEGORY_SQL} AS category
-        FROM '{data_dir}/markets-*.parquet'
+        FROM '{data_dir}/markets/date=*/part.parquet'
         WHERE result IN ('yes', 'no')
           AND volume >= {min_volume}
           AND close_time > open_time
@@ -87,8 +90,11 @@ def compute_pit_prices(con: duckdb.DuckDBPyConnection, data_dir: Path, min_volum
     print("Loading trades for resolved markets...")
     con.execute(f"""
         CREATE OR REPLACE TABLE trades AS
-        SELECT t.ticker, t.yes_price, t.created_time
-        FROM '{data_dir}/trades-*.parquet' t
+        SELECT
+            t.ticker,
+            CAST(t.yes_price * 100 AS INTEGER) AS yes_price,
+            t.created_time
+        FROM '{data_dir}/trades/date=*/part.parquet' t
         SEMI JOIN markets m ON t.ticker = m.ticker
         ORDER BY t.ticker, t.created_time
     """)
@@ -365,10 +371,11 @@ def main() -> None:
     parser.add_argument("--min-volume", type=int, default=10)
     args = parser.parse_args()
 
-    if not (args.data_dir / "markets-0000.parquet").exists():
-        raise FileNotFoundError(f"Markets data not found in {args.data_dir}")
-    if not (args.data_dir / "trades-0000.parquet").exists():
-        raise FileNotFoundError(f"Trades data not found in {args.data_dir}")
+    # Unified tree layout: data/kalshi/{markets,trades}/date=YYYY-MM-DD/part.parquet
+    if not list((args.data_dir / "markets").glob("date=*/part.parquet")):
+        raise FileNotFoundError(f"Markets partitions not found in {args.data_dir}/markets/")
+    if not list((args.data_dir / "trades").glob("date=*/part.parquet")):
+        raise FileNotFoundError(f"Trades partitions not found in {args.data_dir}/trades/")
 
     print("Connecting to DuckDB (in-memory)...")
     con = duckdb.connect()

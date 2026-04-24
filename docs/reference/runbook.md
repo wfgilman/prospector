@@ -19,9 +19,44 @@ ruff check src tests scripts
 
 ---
 
+## Data layer overview (as of 2026-04-23)
+
+Canonical parquet tree at `data/kalshi/{markets,trades}/date=YYYY-MM-DD/part.parquet`. Built from two sources, merged and deduped by the writers:
+
+- **TrevorJS HuggingFace** — migrated in once (see `scripts/migrate_trevorjs.py`) for historical coverage Jun 2021 → Jan 2026.
+- **In-house `/historical/*` + live endpoints** — via `scripts/backfill_kalshi.py` and `scripts/pull_kalshi_incremental.py` for the Feb 2026 onwards window.
+
+Cross-check 2026-04-23 verified byte-for-byte agreement on the overlap: 22 tickers / 12,862 trades, all count_delta=0 and trade_id_overlap=100%.
+
+Hyperliquid funding + OHLCV at `data/hyperliquid/` and `data/ohlcv/`. Coinbase BTC-USD / ETH-USD 1m at `data/coinbase/<product>/1m.parquet` (used by the #4 FOMC event study — Hyperliquid's 1m retention is only ~3 days so historical 1m comes from Coinbase).
+
+See [`../implementation/data-pipeline.md`](../implementation/data-pipeline.md) for the full map of which endpoints are retention-gated and which aren't.
+
+## Daily data cron
+
+`scripts/data_incremental_launchd.sh` runs three pulls sequentially:
+1. Kalshi incremental (`scripts/pull_kalshi_incremental.py`) — appends trades since per-ticker watermark.
+2. Hyperliquid incremental (`scripts/backfill_hyperliquid.py`) — funding + 1m/1h/1d candles.
+3. Coinbase incremental (`python -m prospector.data.download_coinbase`) — 1m BTC-USD/ETH-USD; the only US-accessible deep-history source for 1m.
+
+Installed via `scripts/launchd/com.prospector.data-incremental.plist`, daily at 03:00 local with catch-up-on-wake. Logs at `data/incremental/logs/incremental-YYYYMMDD.log`.
+
+```bash
+# Load
+launchctl bootstrap gui/$UID scripts/launchd/com.prospector.data-incremental.plist
+
+# Check
+launchctl print gui/$UID/com.prospector.data-incremental | grep -E "state|last exit"
+
+# Unload (e.g., for debugging)
+launchctl bootout gui/$UID/com.prospector.data-incremental
+```
+
+---
+
 ## PM Underwriting Scripts
 
-All scripts use the Kalshi HuggingFace dataset at `data/kalshi_hf/`. The dataset is 5.3 GB of parquet files and is gitignored. To download it, use `huggingface_hub.hf_hub_download()` for the `TrevorJS/kalshi-trades` dataset.
+Currently still read from `data/kalshi_hf/` (the pre-migration HF parquets). A follow-up port would point them at `data/kalshi/{markets,trades}/date=*/part.parquet` and drop the cents-to-dollars `/100` scaling (unified tree already normalized to `[0, 1]`). Affected scripts: `build_calibration_curve.py`, `walk_forward_backtest.py`, `capital_constrained_sim.py`, `refresh_calibration_store.py`, `compute_sigma_table.py`, `return_distribution.py`. Until they're ported, keep `data/kalshi_hf/` on disk. Once ported, the HF directory can be deleted for 5.3 GB reclaim.
 
 ### Build Calibration Curve
 

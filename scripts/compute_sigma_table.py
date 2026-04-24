@@ -40,7 +40,10 @@ from return_distribution import (  # noqa: E402
     load_and_split,
 )
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "kalshi_hf"
+# Delegates data loading to walk_forward_backtest.load_and_split, which
+# already reads from the unified tree (data/kalshi/). Keep this constant
+# for callers that need a data-dir override.
+DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "kalshi"
 OUT_PATH = (
     Path(__file__).resolve().parent.parent
     / "data"

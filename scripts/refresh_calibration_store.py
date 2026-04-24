@@ -24,7 +24,8 @@ from prospector.strategies.pm_underwriting.calibration import (
 from prospector.strategies.pm_underwriting.categorize import category_sql
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_DATA_DIR = REPO_ROOT / "data" / "kalshi_hf"
+# Unified tree (post-TrevorJS-migration). int-cents cast in trades SQL.
+DEFAULT_DATA_DIR = REPO_ROOT / "data" / "kalshi"
 DEFAULT_STORE_DIR = REPO_ROOT / "data" / "calibration" / "store"
 
 
@@ -46,7 +47,7 @@ def build_pit_tables(
             close_time,
             open_time + (close_time - open_time) / 2 AS pit_time,
             {category_sql()} AS category
-        FROM '{data_dir}/markets-*.parquet'
+        FROM '{data_dir}/markets/date=*/part.parquet'
         WHERE result IN ('yes', 'no')
           AND volume >= {min_volume}
           AND close_time > open_time
@@ -55,8 +56,11 @@ def build_pit_tables(
     con.execute(
         f"""
         CREATE OR REPLACE TABLE trades AS
-        SELECT t.ticker, t.yes_price, t.created_time
-        FROM '{data_dir}/trades-*.parquet' t
+        SELECT
+            t.ticker,
+            CAST(t.yes_price * 100 AS INTEGER) AS yes_price,
+            t.created_time
+        FROM '{data_dir}/trades/date=*/part.parquet' t
         SEMI JOIN markets m ON t.ticker = m.ticker
         ORDER BY t.ticker, t.created_time
         """
@@ -118,10 +122,10 @@ def main() -> None:
     parser.add_argument("--min-volume", type=int, default=10)
     args = parser.parse_args()
 
-    if not (args.data_dir / "markets-0000.parquet").exists():
-        raise FileNotFoundError(f"Markets parquet not found in {args.data_dir}")
-    if not (args.data_dir / "trades-0000.parquet").exists():
-        raise FileNotFoundError(f"Trades parquet not found in {args.data_dir}")
+    if not list((args.data_dir / "markets").glob("date=*/part.parquet")):
+        raise FileNotFoundError(f"Markets partitions not found in {args.data_dir}/markets/")
+    if not list((args.data_dir / "trades").glob("date=*/part.parquet")):
+        raise FileNotFoundError(f"Trades partitions not found in {args.data_dir}/trades/")
 
     con = duckdb.connect()
     print("Building PIT tables...")

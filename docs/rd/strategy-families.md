@@ -334,3 +334,13 @@ Deep-dive: [`deep-dive-kalshi-hyperliquid-vol-surface.md`](deep-dive-kalshi-hype
 Fallback if #10 fails the Week-1 spike: #4 (Kalshi ↔ crypto narrative spread) — deep-dive already written, 1-week FOMC event study ready to run.
 
 **Update (2026-04-22):** Week-1 spike failed the pre-registered convergence criterion, but the real/null gap ratio of 0.37 indicates real cross-market information the specific formulation didn't capture. Decision: *not* pivoting to #4 yet. Entering a three-phase investigation (diagnostic → in-house data pipeline → re-validate on clean data) to exhaust the systematic-exploit possibility. See [`deep-dive-kalshi-hyperliquid-vol-surface.md`](deep-dive-kalshi-hyperliquid-vol-surface.md) §13 for the plan and [`../implementation/data-pipeline.md`](../implementation/data-pipeline.md) for the now-core-competency data infrastructure scope.
+
+**Update (2026-04-23):** #10 Phase 3 (post-data-migration) replicated the D1 longshot wedge finding; convergence thesis stays dead. Folded into PM Phase 5 hedging overlay as planned.
+
+**Update (2026-04-23) — operational-triage framework adopted:** see [`operational-triage.md`](operational-triage.md). The framework applies two filters to every R&D candidate:
+1. **Cadence** — can we execute at the thesis-required speed? Our envelope tops out at ~15-min; <5-min is not credible from our infra.
+2. **Throughput** — ≥500 tradeable events/year OR long-lived positions, or it can't drive structural-arb P&L.
+
+Applied to the queue, this formally **deprioritizes #4 (narrative spread)**: fails cadence at 5m granularity, fails throughput at ~40 FOMC events/yr (even with perfect execution, insufficient for structural arb). Not pivoted-and-killed — deprioritized with revisit-criteria around infrastructure-envelope changes.
+
+The best active candidates for the next R&D track are **#12 (weather ensemble)** and **#2 (token unlocks)** — both fit our cadence envelope and have usable throughput.

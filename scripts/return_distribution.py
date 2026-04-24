@@ -28,7 +28,8 @@ from pathlib import Path
 import duckdb
 import numpy as np
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "kalshi_hf"
+# Unified tree (post-TrevorJS-migration). int-cents cast in trades SQL.
+DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "kalshi"
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "data" / "calibration"
 
 CATEGORY_SQL = """
@@ -80,7 +81,7 @@ def load_and_split(con: duckdb.DuckDBPyConnection, data_dir: Path, min_volume: i
         SELECT ticker, event_ticker, result, volume, open_time, close_time,
                open_time + (close_time - open_time) / 2 AS pit_time,
                {CATEGORY_SQL} AS category
-        FROM '{data_dir}/markets-*.parquet'
+        FROM '{data_dir}/markets/date=*/part.parquet'
         WHERE result IN ('yes', 'no')
           AND volume >= {min_volume}
           AND close_time > open_time
@@ -90,8 +91,11 @@ def load_and_split(con: duckdb.DuckDBPyConnection, data_dir: Path, min_volume: i
     print("Loading trades (filtered to resolved markets)...")
     con.execute(f"""
         CREATE TABLE trades AS
-        SELECT t.ticker, t.yes_price, t.created_time
-        FROM '{data_dir}/trades-*.parquet' t
+        SELECT
+            t.ticker,
+            CAST(t.yes_price * 100 AS INTEGER) AS yes_price,
+            t.created_time
+        FROM '{data_dir}/trades/date=*/part.parquet' t
         SEMI JOIN markets m ON t.ticker = m.ticker
         ORDER BY t.ticker, t.created_time
     """)

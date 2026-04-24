@@ -23,9 +23,10 @@ from prospector.data.download_funding import download_funding_all
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_COINS = ["BTC", "ETH", "SOL"]
-# 1m unblocks #4 Phase 1 re-run; hourly unblocks the vol-surface refit;
-# daily is a cheap-to-keep reference.
-M2_INTERVALS = ["1m", "1h", "1d"]
+# Full interval set: 1m for sub-hour studies (#4 re-runs), 1h for vol-
+# surface work, 4h/1d/1w for longer-term context. This is a superset of
+# what the retired `com.prospector.ohlcv-refresh` job used to pull.
+M2_INTERVALS = ["1m", "1h", "4h", "1d", "1w"]
 DEFAULT_LOOKBACK_DAYS = 730
 
 

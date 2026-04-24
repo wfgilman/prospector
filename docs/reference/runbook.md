@@ -36,10 +36,12 @@ See [`../implementation/data-pipeline.md`](../implementation/data-pipeline.md) f
 
 `scripts/data_incremental_launchd.sh` runs three pulls sequentially:
 1. Kalshi incremental (`scripts/pull_kalshi_incremental.py`) — appends trades since per-ticker watermark.
-2. Hyperliquid incremental (`scripts/backfill_hyperliquid.py`) — funding + 1m/1h/1d candles.
+2. Hyperliquid incremental (`scripts/backfill_hyperliquid.py`) — funding + 1m/1h/4h/1d/1w candles.
 3. Coinbase incremental (`python -m prospector.data.download_coinbase`) — 1m BTC-USD/ETH-USD; the only US-accessible deep-history source for 1m.
 
 Installed via `scripts/launchd/com.prospector.data-incremental.plist`, daily at 03:00 local with catch-up-on-wake. Logs at `data/incremental/logs/incremental-YYYYMMDD.log`.
+
+Consolidated on 2026-04-23 — the separate `com.prospector.ohlcv-refresh` job (02:00 daily, Hyperliquid 1w/4h/1d/1h only) was retired because the Hyperliquid step here now covers the full interval set. Retired plist archived at `~/Library/LaunchAgents/retired/com.prospector.ohlcv-refresh.plist`.
 
 ```bash
 # Load

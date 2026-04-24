@@ -63,7 +63,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 LADDER_PATH = REPO_ROOT / "data" / "vol_surface" / "kalshi_ladder.parquet"
 PERP_PATH = REPO_ROOT / "data" / "vol_surface" / "perp_implied.parquet"
 OHLCV_PATH = REPO_ROOT / "data" / "ohlcv" / "BTC_PERP" / "1h.parquet"
-HF_DIR = REPO_ROOT / "data" / "kalshi_hf"
+# D2 needs event open/close times. Source migrated to unified tree 2026-04-23.
+KALSHI_DIR = REPO_ROOT / "data" / "kalshi"
 OUT_DIR = REPO_ROOT / "data" / "vol_surface" / "diagnostic"
 
 
@@ -102,7 +103,7 @@ def load_event_meta(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """open_time + close_time per event — for D2's life-fraction."""
     return con.execute(f"""
         SELECT DISTINCT event_ticker, open_time, close_time
-        FROM read_parquet('{HF_DIR}/markets-*.parquet')
+        FROM read_parquet('{KALSHI_DIR}/markets/date=*/part.parquet')
         WHERE event_ticker LIKE 'KXBTC-%'
     """).fetchdf()
 
@@ -401,8 +402,8 @@ def diagnostic_d4(con: duckdb.DuckDBPyConnection) -> dict:
     lognormal q evaluated at each bucket using current spot+sigma. Using the
     full perp_implied.parquet isn't possible because it's scoped to the
     high-volume event universe."""
-    markets_glob = str(HF_DIR / "markets-*.parquet")
-    trades_glob = str(HF_DIR / "trades-*.parquet")
+    markets_glob = str(KALSHI_DIR / "markets" / "date=*" / "part.parquet")
+    trades_glob = str(KALSHI_DIR / "trades" / "date=*" / "part.parquet")
 
     # Find moderate-volume events and their B-type tickers.
     con.execute(f"""
@@ -423,7 +424,7 @@ def diagnostic_d4(con: duckdb.DuckDBPyConnection) -> dict:
               AND ticker LIKE '%-B%'
               AND status = 'finalized'
               AND close_time >= TIMESTAMP '2025-09-17'
-              AND close_time <= TIMESTAMP '2026-01-30'
+              AND close_time <= TIMESTAMP '2026-04-23'
         ),
         by_event AS (
             SELECT event_ticker, COUNT(*) AS n_tickers
@@ -501,7 +502,8 @@ def diagnostic_d4(con: duckdb.DuckDBPyConnection) -> dict:
     """).fetchdf()
 
     # Renormalize per (event, snapshot).
-    df_raw["p_raw"] = df_raw["yes_price"] / 100.0
+    # Prices in unified tree are already [0, 1]; no /100 scaling.
+    df_raw["p_raw"] = df_raw["yes_price"].astype(float)
     grouped_sum = df_raw.groupby(
         ["event_ticker", "snapshot_ts"]
     )["p_raw"].transform("sum")

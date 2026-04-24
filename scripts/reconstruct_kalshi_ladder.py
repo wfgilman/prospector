@@ -18,8 +18,11 @@ from pathlib import Path
 import duckdb
 
 # --- Pre-registered hyperparameters (see §5.0) ---------------------------------
+# Phase 3 update (2026-04-23): source paths migrated from HF to unified tree;
+# DATE_END extended to 2026-04-23 (TrevorJS + /historical/* pulls). Train
+# boundary stays locked at 2026-01-10; test fold now extends ~3 more months.
 DATE_START = "2025-09-17"
-DATE_END = "2026-04-22"
+DATE_END = "2026-04-23"
 CONTRACT_PREFIX = "KXBTC-"
 CONTRACT_TYPE = "B"                # B-type (range bucket) only; T-types deferred
 SNAPSHOT_CADENCE_MIN = 15
@@ -27,7 +30,9 @@ MIN_TRADES_PER_EVENT = 500
 # --------------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-HF_DIR = REPO_ROOT / "data" / "kalshi_hf"
+# Unified tree — populated by migrate_trevorjs.py + incremental /historical/*
+# pulls. Prices already normalized to [0, 1] so no /100 scaling in SQL below.
+KALSHI_DIR = REPO_ROOT / "data" / "kalshi"
 OUT_DIR = REPO_ROOT / "data" / "vol_surface"
 OUT_PATH = OUT_DIR / "kalshi_ladder.parquet"
 
@@ -38,8 +43,8 @@ BUCKET_RE_SQL = r'\$([\d,]+(?:\.\d+)?)\s*to\s*([\d,]+(?:\.\d+)?)'
 
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    markets_glob = str(HF_DIR / "markets-*.parquet")
-    trades_glob = str(HF_DIR / "trades-*.parquet")
+    markets_glob = str(KALSHI_DIR / "markets" / "date=*" / "part.parquet")
+    trades_glob = str(KALSHI_DIR / "trades" / "date=*" / "part.parquet")
 
     con = duckdb.connect()
 
@@ -165,7 +170,7 @@ def main() -> None:
                     bucket_lower,
                     bucket_upper,
                     strike_mid,
-                    yes_price / 100.0 AS p_raw
+                    yes_price AS p_raw
                 FROM ladder_raw
                 WHERE yes_price IS NOT NULL
             ),

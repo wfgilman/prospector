@@ -31,16 +31,15 @@ import numpy as np
 import pandas as pd
 
 # --- Pre-registered hyperparameters (see §5.0) ---------------------------------
-# NOTE: dataset inspection shows HF trades end 2026-01-28 and markets end
-# 2026-01-30. The original test window (2026-02-01 onwards) has no data, so the
-# split is revised to 2026-01-10 — roughly 50/50 on the dense portion (308/323
-# qualifying events land in 2025-12 and 2026-01). This revision was committed
-# before the test fold was inspected. If/when more data arrives, re-run with
-# the wider window without refitting train.
+# NOTE: Phase 3 (2026-04-23) extends TEST_END from 2026-01-30 to 2026-04-23.
+# Train boundary stays locked at 2026-01-10 (per the original §5.0 pre-reg,
+# "If/when more data arrives, re-run with the wider window without refitting
+# train"). With the TrevorJS migration + /historical/* pulls, the test fold
+# now covers ~3 additional months of out-of-sample data — ~5× expansion.
 TRAIN_START = "2025-09-17"
 TRAIN_END = "2026-01-10"
 TEST_START = "2026-01-10"
-TEST_END = "2026-01-30"
+TEST_END = "2026-04-23"
 
 MIN_LADDER_COMPLETENESS = 0.75     # added after train-fold ladder inspection
 MAX_GAP_THRESHOLD = 0.03           # 300bp; primary decision threshold

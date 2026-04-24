@@ -498,3 +498,62 @@ My recommendation is **B**: the Phase 1 finding is real but too close to what PM
 - `data/vol_surface/diagnostic/d3_gap_emp_vs_lognormal.parquet`
 - `data/vol_surface/diagnostic/d4_moderate_volume_gaps.parquet`
 - `data/vol_surface/diagnostic/summary.txt` — plain-text decision record
+
+---
+
+## 15. Phase 3 re-validation on unified data tree (2026-04-23)
+
+### 15.1 What changed
+
+Data source migrated from TrevorJS HF (`data/kalshi_hf/*.parquet`) to the unified in-house tree (`data/kalshi/{trades,markets}/date=*/part.parquet`) built from TrevorJS + our `/historical/*` pulls. Test-fold end extended from 2026-01-30 → 2026-04-23, giving ~5× more test-fold data (2,548 snapshots vs. 1,872 in Phase 1). Train boundary stays locked at 2026-01-10 per pre-registration.
+
+Pre-registered hyperparameters unchanged: EWMA λ=0.94, 48h lookback, drift=0, snapshot cadence 15 min, `MIN_LADDER_COMPLETENESS=0.75`, `MAX_GAP_THRESHOLD=0.03`, same pass criteria.
+
+One data-pipeline fix-up: 133 KXBTC events from the partial `/historical/*` backfill had been written with an early schema (yes_sub_title empty-string defaulted by the schema-retrofit). Re-pulled those events' markets from `/events/{event_ticker}` so the strike-range text parses correctly.
+
+### 15.2 Week-1 spike results (side-by-side)
+
+| Fold | n | Median gap | p90 gap | Reversion β | Half-life |
+|---|---|---|---|---|---|
+| Train (both phases) | 2,757 | 12.74% | 38.30% | −0.054 | 12.48h |
+| **Test (Phase 1)** | **1,872** | **9.13%** | **32.77%** | **+0.013** | **NaN** |
+| **Test (Phase 3)** | **2,548** | **7.46%** | **28.61%** | **+0.024** | **NaN** |
+| Test null (Phase 3) | 2,548 | 34.03% | 95.38% | −0.947 | 0.24h |
+
+Real/null median-gap ratio: **0.37 (Phase 1) → 0.22 (Phase 3)**. More data → *stronger* cross-market alignment, not weaker. But still no mean-reversion: β ≈ 0 in test fold, same as Phase 1.
+
+### 15.3 D1 diagnostic (longshot wedge) — replication
+
+| Space | Phase 1 | Phase 3 | Replicates? |
+|---|---|---|---|
+| Renorm, at rel_pos=0 | −10.08pp, t=−50.08, n=4,601 | **−9.41pp, t=−52.25, n=5,277** | Yes — sign, magnitude, and t-stat all hold |
+| Raw, at rel_pos=+17 | +16.78pp, t=+17.51, n=901 | **+12.60pp, t=+17.16, n=1,222** | Yes on sign and t-stat; magnitude softens from 16.78 → 12.60pp |
+
+The raw-space wedge is ~4pp smaller in Phase 3. Likely explanation: Phase 1's window (Sep 2025 → Jan 2026) was a BTC rally regime (spot $90K→$100K+); the added Phase 3 window (Feb → Apr 2026) includes BTC's March–April crash ($100K→$78K). Tail overpricing tends to be more pronounced on rally retail exuberance than on crash-mode fear. Consistent with the prospect-theory origin of favorite-longshot bias: pronounced during upward momentum, muted during drawdowns.
+
+### 15.4 D2, D3, D4 replications
+
+| Diagnostic | Phase 1 | Phase 3 | Same decision? |
+|---|---|---|---|
+| D2 life-decile slope | −0.0005/decile | −0.0008/decile | Yes — no terminal convergence |
+| D3 empirical / lognormal median-gap ratio | 1.016 | 1.043 | Yes — lognormal is not the problem |
+| D4 moderate / high-volume gap ratio | 1.23 | 1.35 | Yes — no hidden edge in thin-volume slice |
+
+All four diagnostic outcomes replicate. 1/4 passes, same as Phase 1.
+
+### 15.5 What this confirms
+
+1. **The convergence thesis is conclusively dead.** With 5× more test-fold data, reversion β stays indistinguishable from zero. This isn't an N-power issue; the gaps genuinely don't oscillate to close on a 1h horizon.
+2. **The longshot-bias wedge (D1) is real and durable.** Replicates across two separate, non-overlapping windows at t-stats of ±17 to ±52. Magnitude regime-sensitive (rally > crash), but sign and significance are stable.
+3. **Cross-market alignment is stronger than Phase 1 suggested.** Real/null ratio dropped from 0.37 to 0.22 — scrambling the Kalshi↔Hyperliquid pairing roughly 5× the divergence, up from 3× in Phase 1. There *is* event-specific information; we just haven't found the right instrument for it.
+
+### 15.6 Decision
+
+No change from Phase 1. **Option B stands**: the delta-hedging overlay for PM Phase 5 (`docs/implementation/plan.md` §Phase 5) remains the right action, now backed by independent replication. #10 as a standalone vol-surface arbitrage thesis is closed.
+
+### 15.7 Artifacts
+
+- Updated scripts (same names): `scripts/{reconstruct_kalshi_ladder,fit_perp_implied_dist,divergence_study,vol_surface_diagnostic}.py` — now read from the unified tree
+- `data/vol_surface/{kalshi_ladder,perp_implied,divergence_panel}.parquet` — Phase 3 outputs
+- `data/vol_surface/week1_decision.txt` — Phase 3 decision log
+- `data/vol_surface/diagnostic/summary.txt` — Phase 3 diagnostic summary

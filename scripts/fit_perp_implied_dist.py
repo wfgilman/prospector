@@ -73,7 +73,7 @@ def main() -> None:
         -- close_time isn't stored in the ladder; recover it from markets.
         closes AS (
             SELECT DISTINCT event_ticker, close_time
-            FROM read_parquet('{REPO_ROOT}/data/kalshi_hf/markets-*.parquet')
+            FROM read_parquet('{REPO_ROOT}/data/kalshi/markets/date=*/part.parquet')
             WHERE event_ticker LIKE 'KXBTC-%'
         )
         SELECT

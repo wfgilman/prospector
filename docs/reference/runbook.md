@@ -162,6 +162,35 @@ without a restructure. The manifest file is the only check-in under
 - `--max-bin-frac` (0.15) — per-(side, 5¢ bin) concentration cap (replaces the retired `--max-category-frac`)
 - `--max-trades-per-day` (20) — daily throughput cap
 - `--min-edge-pp` (5.0) — fee-adjusted edge floor (raised from 3.0 on 2026-04-21)
+- `--entry-price-min` (0.0) / `--entry-price-max` (1.0) — entry-price band. Default = lottery book (full range, edge/σ pulls to 85-99¢ extremes). Set to e.g. 0.55-0.75 for the insurance book.
+
+### Insurance-slice book (parallel)
+
+A second paper book runs alongside the lottery book on the same daemon
+(`paper_trade.py`) but scoped to a 0.55-0.75 entry-price band — the slice
+where σ is low and WR is high, what `deep-dive-prediction-market-underwriting.md`
+originally described as "underwriting." Wrapper at
+`scripts/paper_trade_insurance_launchd.sh`, plist at
+`scripts/launchd/com.prospector.paper-trade-insurance.plist`.
+
+```bash
+# Install / refresh
+cp scripts/launchd/com.prospector.paper-trade-insurance.plist ~/Library/LaunchAgents/
+launchctl unload ~/Library/LaunchAgents/com.prospector.paper-trade-insurance.plist 2>/dev/null
+launchctl load ~/Library/LaunchAgents/com.prospector.paper-trade-insurance.plist
+
+# Status / manual tick
+launchctl list | grep paper-trade-insurance
+launchctl start com.prospector.paper-trade-insurance
+
+# Tail
+tail -f data/paper/pm_underwriting_insurance/logs/paper_trade-$(date -u +%Y%m%d).log
+```
+
+State lives at `data/paper/pm_underwriting_insurance/`, fully independent
+of the lottery book. Both books share the calibration store and σ-table.
+Kill criterion: 30-day paper Sharpe < 0.5 after fees → stop the launchd
+job; lottery book continues unaffected.
 
 **Rebuilding the σ table.** Regenerate whenever the calibration snapshot is refreshed or the walk-forward window moves:
 

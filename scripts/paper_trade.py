@@ -71,6 +71,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=["sports", "crypto"],
         help='Filter to these categories. Pass "all" to disable filtering.',
     )
+    p.add_argument(
+        "--entry-price-min",
+        type=float,
+        default=0.0,
+        help=(
+            "Lower bound on entry price (inclusive). Defaults to 0.0 = no "
+            "filter (lottery book). Set to e.g. 0.55 for the insurance book "
+            "to scope to favorites at moderate prices."
+        ),
+    )
+    p.add_argument(
+        "--entry-price-max",
+        type=float,
+        default=1.0,
+        help=(
+            "Upper bound on entry price (inclusive). Defaults to 1.0 = no "
+            "filter. Set to e.g. 0.75 for the insurance book."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -94,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
         categories=categories,
         max_days_to_close=args.max_days_to_close or None,
         shadow_ledger_root=shadow_root,
+        entry_price_min=args.entry_price_min,
+        entry_price_max=args.entry_price_max,
     )
     portfolio_cfg = PortfolioConfig(
         initial_nav=args.initial_nav,

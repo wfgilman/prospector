@@ -19,9 +19,18 @@
 
 [[strategy]]
 name = "pm_underwriting"
-display_name = "PM Underwriting (Kalshi)"
+display_name = "PM Underwriting · Lottery (0.85-1.0)"
 schema = "kalshi_binary"
 portfolio_db = "pm_underwriting/portfolio.db"
 log_dir = "pm_underwriting/logs"
 launchd_label = "com.prospector.paper-trade"
+enabled = true
+
+[[strategy]]
+name = "pm_underwriting_insurance"
+display_name = "PM Underwriting · Insurance (0.55-0.75)"
+schema = "kalshi_binary"
+portfolio_db = "pm_underwriting_insurance/portfolio.db"
+log_dir = "pm_underwriting_insurance/logs"
+launchd_label = "com.prospector.paper-trade-insurance"
 enabled = true

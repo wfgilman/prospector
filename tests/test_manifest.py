@@ -7,6 +7,9 @@ import pytest
 
 from prospector.manifest import StrategyEntry, load_manifest
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+LIVE_MANIFEST = REPO_ROOT / "data" / "paper" / "manifest.toml"
+
 
 def _write(tmp_path: Path, body: str) -> Path:
     path = tmp_path / "manifest.toml"
@@ -104,3 +107,18 @@ def test_load_manifest_missing_required_field(tmp_path: Path) -> None:
     )
     with pytest.raises(KeyError, match="enabled"):
         load_manifest(manifest)
+
+
+def test_live_manifest_has_lottery_and_insurance_books() -> None:
+    """Catches accidental drift between the manifest and what the daemons
+    actually write to disk. Insurance book wired in 2026-04-25."""
+    entries = load_manifest(LIVE_MANIFEST)
+    by_name = {e.name: e for e in entries}
+    assert "pm_underwriting" in by_name, "lottery book missing from manifest"
+    assert "pm_underwriting_insurance" in by_name, "insurance book missing from manifest"
+    insurance = by_name["pm_underwriting_insurance"]
+    assert insurance.launchd_label == "com.prospector.paper-trade-insurance"
+    assert insurance.schema == "kalshi_binary"
+    assert insurance.enabled is True
+    assert insurance.portfolio_db.name == "portfolio.db"
+    assert insurance.log_dir.name == "logs"

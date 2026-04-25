@@ -18,6 +18,7 @@ import streamlit as st
 
 from prospector.dashboard import (
     inject_theme,
+    render_comparison,
     render_strategy,
 )
 from prospector.manifest import load_manifest
@@ -51,12 +52,19 @@ def main() -> None:
         st.info("No enabled strategies in the manifest.")
         return
 
-    for i, entry in enumerate(entries):
-        if i > 0:
-            st.markdown(
-                "<div style='height:1.25rem;'></div>", unsafe_allow_html=True
-            )
-        render_strategy(entry)
+    # Single strategy → render directly (no tab chrome). Two or more →
+    # top-level tabs with a "Compare" tab first; per-strategy tabs after.
+    if len(entries) == 1:
+        render_strategy(entries[0])
+        return
+
+    tab_labels = ["Compare", *[e.display_name for e in entries]]
+    tabs = st.tabs(tab_labels)
+    with tabs[0]:
+        render_comparison(entries)
+    for tab, entry in zip(tabs[1:], entries):
+        with tab:
+            render_strategy(entry)
 
 
 main()

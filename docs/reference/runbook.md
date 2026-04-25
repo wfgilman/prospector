@@ -237,6 +237,13 @@ pip install -e .[dashboard]
 streamlit run scripts/dashboard.py
 ```
 
+**Layout.** With one enabled strategy, the dashboard renders that strategy
+directly. With two or more, it shows top-level tabs: a `Compare` tab first
+(side-by-side stat cards, overlaid cumulative-P&L chart, KPI delta table)
+and one tab per strategy with the full per-strategy view. Strategies whose
+DB doesn't exist yet (e.g. a freshly-loaded daemon) render as "awaiting
+first tick" placeholders rather than crashing the column.
+
 Set `PROSPECTOR_MANIFEST=<path>` to point at an alternate manifest (useful for
 smoke-testing against a copy of a DB before cutover).
 

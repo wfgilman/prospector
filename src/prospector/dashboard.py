@@ -552,6 +552,137 @@ def render_strategy(entry: StrategyEntry) -> None:
         )
 
 
+def render_comparison(entries: list[StrategyEntry]) -> None:
+    """Side-by-side comparison view across enabled strategies.
+
+    Renders one column per strategy with the same compact stat card used
+    on individual tabs, then an overlaid cumulative-P&L chart. Strategies
+    whose portfolio DB doesn't exist yet are surfaced as "no data" tiles
+    so the eyeballed comparison stays stable across cold starts.
+
+    Caller is responsible for only invoking this when there are 2+ entries.
+    """
+    import altair as alt
+    import streamlit as st
+
+    alt.themes.register("quant_terminal", _altair_theme)
+    alt.themes.enable("quant_terminal")
+
+    summaries = [(e, load_portfolio_summary(e.portfolio_db)) for e in entries]
+
+    cols = st.columns(len(summaries))
+    for col, (entry, summary) in zip(cols, summaries):
+        with col:
+            if summary is None:
+                _render_empty_stat_card(entry)
+            else:
+                _render_stat_card(entry, summary)
+
+    st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="qt-eyebrow">P&amp;L trajectory · overlaid</div>',
+        unsafe_allow_html=True,
+    )
+
+    overlays = []
+    for entry, _ in summaries:
+        df = build_pnl_series(entry.portfolio_db)
+        if df.empty:
+            continue
+        df = df.copy()
+        df["strategy"] = entry.display_name
+        overlays.append(df)
+
+    if not overlays:
+        st.caption("No realized P&L on either book yet.")
+    else:
+        plot_df = pd.concat(overlays, ignore_index=True)
+        # If any strategy only has the placeholder (single now-row at 0),
+        # the chart still renders but as a flat dot — fine.
+        line = (
+            alt.Chart(plot_df)
+            .mark_line(interpolate="monotone", strokeWidth=1.75)
+            .encode(
+                x=alt.X("time:T", title=None),
+                y=alt.Y("pnl:Q", title="Cumulative realized P&L ($)"),
+                color=alt.Color("strategy:N", title=None,
+                                legend=alt.Legend(orient="top")),
+            )
+        )
+        zero_rule = (
+            alt.Chart(pd.DataFrame({"y": [0]}))
+            .mark_rule(color=_PALETTE["border"], strokeDash=[2, 3])
+            .encode(y="y:Q")
+        )
+        st.altair_chart(
+            (line + zero_rule).properties(height=220),
+            width="stretch",
+        )
+
+    # Compact KPI delta table — easier to read at-a-glance than reading
+    # both cards. Skips when only one strategy has data.
+    populated = [(e, s) for e, s in summaries if s is not None]
+    if len(populated) >= 2:
+        st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
+        st.markdown(
+            '<div class="qt-eyebrow">Side-by-side KPIs</div>',
+            unsafe_allow_html=True,
+        )
+        kpi_df = pd.DataFrame(
+            [
+                {
+                    "strategy": e.display_name,
+                    "NAV": f"${s.nav:,.2f}",
+                    "P&L": f"${s.realized_pnl:+,.2f}",
+                    "ROI %": (
+                        f"{(s.nav - s.initial_nav) / s.initial_nav * 100:+.2f}%"
+                        if s.initial_nav else "—"
+                    ),
+                    "Open": s.open_positions,
+                    "Locked": f"${s.locked_risk:,.2f}",
+                    "Today": s.trades_today,
+                }
+                for e, s in populated
+            ]
+        )
+        st.dataframe(kpi_df, width="stretch", hide_index=True)
+
+
+def _render_empty_stat_card(entry: StrategyEntry) -> None:
+    """Placeholder card for a strategy whose DB doesn't exist yet.
+
+    Lets the comparison columns stay aligned even when the insurance book
+    hasn't ticked once. The first paper-trade tick creates the DB.
+    """
+    import streamlit as st
+
+    st.markdown(
+        f"""
+        <div class="qt-stat-card">
+            <div class="qt-stat-card-head">
+                <div class="qt-stat-card-name">{entry.display_name}</div>
+                <div class="qt-stat-card-tick">awaiting first tick</div>
+            </div>
+            <div class="qt-stat-card-row">
+                <div class="qt-stat-card-item primary">
+                    <div class="qt-kpi-label">NAV</div>
+                    <div class="qt-stat-card-nav">—</div>
+                    <div class="qt-stat-card-delta flat">no data yet</div>
+                </div>
+                <div class="qt-stat-card-item">
+                    <div class="qt-kpi-label">DB path</div>
+                    <div class="qt-kpi-value qt-mono"
+                         style="font-size:0.7rem; word-break:break-all;">
+                        {entry.portfolio_db}
+                    </div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _render_kalshi_binary(entry: StrategyEntry) -> None:
     import altair as alt
     import streamlit as st

@@ -4,6 +4,25 @@ This file is the first thing a new agent session should read. It answers "where 
 
 ---
 
+## Workflow mode — R&D (active 2026-04-25)
+
+**Commit and push directly to `main`. No feature branches, no pull requests.**
+
+The project is in R&D — the user is solo, paper-trading, has small kids and limited engagement bandwidth. PR review process is overhead that doesn't earn its weight at this stage. We deploy and fix if necessary; correctness is enforced by tests + ruff + the methodology discipline in `docs/implementation/methodology.md`, not by PR review.
+
+This **overrides** the global `~/AGENTS.md` "feature branch + PR" mandate while in R&D mode.
+
+**Revisit when:** the project transitions to Phase 4 (live, real capital) or the user explicitly asks. At that point, the feature-branch + PR workflow comes back automatically.
+
+What stays the same regardless:
+- Run ruff + the full test suite before pushing
+- Conventional-commit subject lines (`feat:`, `fix:`, `chore:`, etc.)
+- Never skip hooks, never force-push to main, never amend published commits
+- Stage files explicitly (no `git add -A`)
+- The other Git Safety Rules in `~/AGENTS.md` still apply
+
+---
+
 ## What This Project Is
 
 **Prospector** is a locally-hosted trading strategy discovery and deployment system. Originally designed for LLM-driven parameter search on crypto perpetual futures (paused — see R&D docs), the project pivoted to **Prediction Market Underwriting**: applying actuarial calibration curves to Kalshi prediction markets.

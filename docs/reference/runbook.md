@@ -1,330 +1,199 @@
 # Runbook
 
-Operational guide for running Prospector scripts and services.
+> How to run scripts, install launchd jobs, recover from common failures.
+> Operational reference, kept tight.
 
 ---
 
-## Environment Setup
+## Environment
 
 ```bash
-# Activate the project virtual environment
 source /Users/wgilman/workspace/prospector/.venv/bin/activate
 
-# Run tests
-PYTHONPATH=src pytest -q tests
-
-# Run linter
-ruff check src tests scripts
+PYTHONPATH=src pytest -q tests          # tests
+ruff check src tests scripts             # lint
 ```
 
 ---
 
-## Data layer overview (as of 2026-04-23)
+## Data layer
 
-Canonical parquet tree at `data/kalshi/{markets,trades}/date=YYYY-MM-DD/part.parquet`. Built from two sources, merged and deduped by the writers:
-
-- **TrevorJS HuggingFace** — migrated in once (see `scripts/migrate_trevorjs.py`) for historical coverage Jun 2021 → Jan 2026.
-- **In-house `/historical/*` + live endpoints** — via `scripts/backfill_kalshi.py` and `scripts/pull_kalshi_incremental.py` for the Feb 2026 onwards window.
-
-Cross-check 2026-04-23 verified byte-for-byte agreement on the overlap: 22 tickers / 12,862 trades, all count_delta=0 and trade_id_overlap=100%.
-
-Hyperliquid funding + OHLCV at `data/hyperliquid/` and `data/ohlcv/`. Coinbase BTC-USD / ETH-USD 1m at `data/coinbase/<product>/1m.parquet` (used by the #4 FOMC event study — Hyperliquid's 1m retention is only ~3 days so historical 1m comes from Coinbase).
-
-See [`../implementation/data-pipeline.md`](../implementation/data-pipeline.md) for the full map of which endpoints are retention-gated and which aren't.
-
-## Daily data cron
-
-`scripts/data_incremental_launchd.sh` runs three pulls sequentially:
-1. Kalshi incremental (`scripts/pull_kalshi_incremental.py`) — appends trades since per-ticker watermark.
-2. Hyperliquid incremental (`scripts/backfill_hyperliquid.py`) — funding + 1m/1h/4h/1d/1w candles.
-3. Coinbase incremental (`python -m prospector.data.download_coinbase`) — 1m BTC-USD/ETH-USD; the only US-accessible deep-history source for 1m.
-
-Installed via `scripts/launchd/com.prospector.data-incremental.plist`, daily at 03:00 local with catch-up-on-wake. Logs at `data/incremental/logs/incremental-YYYYMMDD.log`.
-
-Consolidated on 2026-04-23 — the separate `com.prospector.ohlcv-refresh` job (02:00 daily, Hyperliquid 1w/4h/1d/1h only) was retired because the Hyperliquid step here now covers the full interval set. Retired plist archived at `~/Library/LaunchAgents/retired/com.prospector.ohlcv-refresh.plist`.
+### Daily incremental cron
 
 ```bash
-# Load
 launchctl bootstrap gui/$UID scripts/launchd/com.prospector.data-incremental.plist
-
-# Check
-launchctl print gui/$UID/com.prospector.data-incremental | grep -E "state|last exit"
-
-# Unload (e.g., for debugging)
-launchctl bootout gui/$UID/com.prospector.data-incremental
+launchctl list | grep data-incremental
+launchctl start com.prospector.data-incremental    # manual trigger
 ```
 
----
+Pulls Kalshi incremental + Hyperliquid funding/OHLCV + Coinbase 1m
+sequentially. Daily 03:00 local. Logs at
+`data/incremental/logs/incremental-YYYYMMDD.log`.
 
-## PM Underwriting Scripts
+See [`platform/data-pipeline.md`](../platform/data-pipeline.md) for
+schema, retention map, gotchas.
 
-Currently still read from `data/kalshi_hf/` (the pre-migration HF parquets). A follow-up port would point them at `data/kalshi/{markets,trades}/date=*/part.parquet` and drop the cents-to-dollars `/100` scaling (unified tree already normalized to `[0, 1]`). Affected scripts: `build_calibration_curve.py`, `walk_forward_backtest.py`, `capital_constrained_sim.py`, `refresh_calibration_store.py`, `compute_sigma_table.py`, `return_distribution.py`. Until they're ported, keep `data/kalshi_hf/` on disk. Once ported, the HF directory can be deleted for 5.3 GB reclaim.
-
-### Build Calibration Curve
-
-Computes PIT prices at 50% of market duration via DuckDB ASOF join, bins by 5% implied probability, measures actual resolution rates. Outputs per-category curves with Wilson confidence intervals.
+### Manual backfills
 
 ```bash
-python scripts/build_calibration_curve.py [--data-dir DATA_DIR] [--min-volume 10]
+PYTHONPATH=src python scripts/backfill_kalshi.py --series KXBTC FED --max-events 3 --verbose
+PYTHONPATH=src python scripts/backfill_hyperliquid.py --verbose
+python -m prospector.data.download_coinbase
 ```
 
-**Outputs:**
-- Console: per-category calibration tables, go/no-go decision
-- `data/calibration/calibration_curves.png`: 8-panel plot (aggregate + 7 categories)
-
-**Runtime:** ~3-4 minutes (loads 140M trades into DuckDB in-memory)
-
-### Walk-Forward Backtest
-
-70/30 temporal split. Builds calibration curves on train set, simulates portfolio on test set. (Phase 2 used fractional Kelly; the live paper trader uses equal-σ sizing — see §Paper-Trading Daemon.) Flat sizing (initial NAV) isolates edge from compounding.
+### Calibration store rebuild
 
 ```bash
-python scripts/walk_forward_backtest.py [--data-dir DATA_DIR] [--min-volume 10]
+python scripts/refresh_calibration_store.py [--min-volume 10]
 ```
 
-**Outputs:**
-- Console: portfolio metrics, per-category breakdown, calibration accuracy table, go/no-go
-- `data/calibration/walk_forward_backtest.png`: NAV curve, cumulative P&L, P&L distribution, monthly P&L
+Writes new snapshot, swaps `current.json` pointer atomically. See
+[`platform/calibration-store.md`](../platform/calibration-store.md).
 
-**Runtime:** ~3-4 minutes
-
-### Capital-Constrained Simulation
-
-Extends the walk-forward backtest with concurrent position tracking, daily capital budget, per-event correlation caps, and throughput limits. Runs at configurable NAV with multiple trades-per-day caps (20, 50, 100, unlimited).
-
-```bash
-python scripts/capital_constrained_sim.py [--data-dir DATA_DIR] [--min-volume 10] [--nav 10000]
-```
-
-**Outputs:**
-- Console: throughput comparison table, per-scenario detail, go/no-go
-- `data/calibration/capital_constrained_sim.png`: return curves, utilization, open positions, daily P&L
-
-**Runtime:** ~4-5 minutes (runs simulation 4 times for each throughput cap)
-
----
-
-## Paper Trading (Phase 3)
-
-Live paper-trading daemon for the PM underwriting strategy. Reads a persisted calibration snapshot, scans Kalshi every 15 min, enters paper positions in a local SQLite portfolio, and resolves positions as markets settle.
-
-### Prerequisites
-
-1. Kalshi API credentials. Set in the shell or a `.env` loaded before launch:
-
-   ```bash
-   export KALSHI_API_KEY_ID="<uuid from Kalshi dashboard>"
-   export KALSHI_PRIVATE_KEY_PATH="/path/to/kalshi.pem"
-   # or inline:
-   # export KALSHI_PRIVATE_KEY_PEM="$(cat kalshi.pem)"
-   ```
-
-2. A calibration snapshot on disk. Build one from the HF dataset:
-
-   ```bash
-   python scripts/refresh_calibration_store.py [--min-volume 10]
-   ```
-
-   Writes `data/calibration/store/calibration-<timestamp>.json` and updates the `current.json` pointer.
-
-### Run the Daemon
-
-```bash
-# Single tick (sweep resolutions, scan, enter, snapshot) — useful for smoke-testing
-python scripts/paper_trade.py --once
-
-# Long-running daemon at 15-min intervals
-python scripts/paper_trade.py --interval 900
-
-# Narrow to specific categories or raise the edge threshold
-python scripts/paper_trade.py --categories sports crypto --min-edge-pp 4.0
-```
-
-**State:**
-- Portfolio DB: `data/paper/pm_underwriting/portfolio.db` (positions + daily_snapshots)
-- Calibration: `data/calibration/store/current.json`
-- σ table: `data/calibration/sigma_table.json` (built by `scripts/compute_sigma_table.py`)
-- Logs (under launchd): `data/paper/pm_underwriting/logs/paper_trade-YYYYMMDD.log` (daily, UTC)
-- Strategy manifest: `data/paper/manifest.toml` — discovery index for the dashboard; daemons ignore it
-
-Per-strategy directories under `data/paper/<strategy>/` keep each strategy's
-DB + logs isolated so a second strategy (e.g. `crypto_perp`) can ship
-without a restructure. The manifest file is the only check-in under
-`data/paper/`; DBs and logs stay gitignored.
-
-**Knobs** (see `scripts/paper_trade.py --help`):
-- `--initial-nav` (default 10,000) — seeds the portfolio on first run only
-- `--book-sigma-target` (0.02) — target σ of the book as a fraction of NAV
-- `--n-target` (150) — expected steady-state count of concurrent positions
-- `--sigma-table` (default `data/calibration/sigma_table.json`) — σ lookup by (category, side, 5¢ bin)
-- `--max-position-frac` (0.01) — per-position risk cap vs NAV (defends against pathologically small σ)
-- `--max-event-frac` (0.05) — per-event_ticker correlation cap
-- `--max-bin-frac` (0.15) — per-(side, 5¢ bin) concentration cap (replaces the retired `--max-category-frac`)
-- `--max-trades-per-day` (20) — daily throughput cap
-- `--min-edge-pp` (5.0) — fee-adjusted edge floor (raised from 3.0 on 2026-04-21)
-- `--entry-price-min` (0.0) / `--entry-price-max` (1.0) — entry-price band. Default = lottery book (full range, edge/σ pulls to 85-99¢ extremes). Set to e.g. 0.55-0.75 for the insurance book.
-
-### Insurance-slice book (parallel)
-
-A second paper book runs alongside the lottery book on the same daemon
-(`paper_trade.py`) but scoped to a 0.55-0.75 entry-price band — the slice
-where σ is low and WR is high, what `deep-dive-prediction-market-underwriting.md`
-originally described as "underwriting." Wrapper at
-`scripts/paper_trade_insurance_launchd.sh`, plist at
-`scripts/launchd/com.prospector.paper-trade-insurance.plist`.
-
-```bash
-# Install / refresh
-cp scripts/launchd/com.prospector.paper-trade-insurance.plist ~/Library/LaunchAgents/
-launchctl unload ~/Library/LaunchAgents/com.prospector.paper-trade-insurance.plist 2>/dev/null
-launchctl load ~/Library/LaunchAgents/com.prospector.paper-trade-insurance.plist
-
-# Status / manual tick
-launchctl list | grep paper-trade-insurance
-launchctl start com.prospector.paper-trade-insurance
-
-# Tail
-tail -f data/paper/pm_underwriting_insurance/logs/paper_trade-$(date -u +%Y%m%d).log
-```
-
-State lives at `data/paper/pm_underwriting_insurance/`, fully independent
-of the lottery book. Both books share the calibration store and σ-table.
-Kill criterion: 30-day paper Sharpe < 0.5 after fees → stop the launchd
-job; lottery book continues unaffected.
-
-**Rebuilding the σ table.** Regenerate whenever the calibration snapshot is refreshed or the walk-forward window moves:
+### σ-table rebuild
 
 ```bash
 python scripts/compute_sigma_table.py
 ```
 
-Output: `data/calibration/sigma_table.json` with per-bin σ (shrunk toward the pooled category/side σ with pseudo-count 200), pooled, and aggregate entries. The paper trader loads it at startup.
+Output: `data/calibration/sigma_table.json`. See [`components/equal-sigma-sizing.md`](../components/equal-sigma-sizing.md).
 
-### Scheduled Ticks (launchd)
+---
 
-The plist in `scripts/launchd/com.prospector.paper-trade.plist` runs
-`paper_trade.py --once` every 15 min via a shell wrapper that appends to a
-UTC-dated log (so logs rotate naturally at midnight).
+## Paper trading
+
+### One-shot tick (smoke test)
 
 ```bash
-# Install / refresh
-cp scripts/launchd/com.prospector.paper-trade.plist ~/Library/LaunchAgents/
-launchctl unload ~/Library/LaunchAgents/com.prospector.paper-trade.plist 2>/dev/null
-launchctl load ~/Library/LaunchAgents/com.prospector.paper-trade.plist
+python scripts/paper_trade.py --once                         # lottery book
+python scripts/paper_trade.py --once \                       # insurance book
+    --portfolio-db data/paper/pm_underwriting_insurance/portfolio.db \
+    --entry-price-min 0.55 --entry-price-max 0.75 --min-edge-pp 3.0
+```
 
-# Check status / trigger a tick manually
+### Foreground daemon
+
+```bash
+python scripts/paper_trade.py --interval 900
+```
+
+### Production (launchd, 15-min cadence)
+
+**Lottery book:**
+```bash
+cp scripts/launchd/com.prospector.paper-trade.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.prospector.paper-trade.plist
 launchctl list | grep paper-trade
 launchctl start com.prospector.paper-trade
-
-# Tail today's log
 tail -f data/paper/pm_underwriting/logs/paper_trade-$(date -u +%Y%m%d).log
 ```
 
-`StartInterval` counts from launch-time wall clock and queues a catch-up tick
-when the Mac wakes from sleep. `RunAtLoad` is false — the first tick fires
-after the 15 min interval elapses, so `launchctl load` doesn't duplicate a
-manual run.
-
-### Dashboard
-
-Streamlit dashboard for paper-trading strategies. Reads `data/paper/manifest.toml`
-and renders one panel per enabled strategy using the renderer for its position
-schema. Today only `kalshi_binary` exists; adding a new schema is a new renderer
-function in `src/prospector/dashboard.py`.
-
+**Insurance book:**
 ```bash
-pip install -e .[dashboard]
-streamlit run scripts/dashboard.py
+cp scripts/launchd/com.prospector.paper-trade-insurance.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.prospector.paper-trade-insurance.plist
+launchctl list | grep paper-trade-insurance
+tail -f data/paper/pm_underwriting_insurance/logs/paper_trade-$(date -u +%Y%m%d).log
 ```
 
-**Layout.** With one enabled strategy, the dashboard renders that strategy
-directly. With two or more, it shows top-level tabs: a `Compare` tab first
-(side-by-side stat cards, overlaid cumulative-P&L chart, KPI delta table)
-and one tab per strategy with the full per-strategy view. Strategies whose
-DB doesn't exist yet (e.g. a freshly-loaded daemon) render as "awaiting
-first tick" placeholders rather than crashing the column.
+Full daemon CLI surface in [`platform/paper-trade-daemon.md`](../platform/paper-trade-daemon.md).
 
-Set `PROSPECTOR_MANIFEST=<path>` to point at an alternate manifest (useful for
-smoke-testing against a copy of a DB before cutover).
+### Stop a book
 
-Layout (kalshi_binary renderer): hero NAV card → KPI tiles (realized P&L,
-locked risk, open, trades today) → NAV trajectory → **per-category sections**
-(sports / crypto / politics / …) each showing a subtotal strip (open count,
-locked risk, upside, avg edge, resolved W/L, realized P&L) above that
-category's open positions → price-bin concentration chart → recent ticks
-table. Theme (dark "quant terminal" — Fraunces display + JetBrains Mono
-numbers + phosphor-green accent) lives in `.streamlit/config.toml` plus the
-`inject_theme()` CSS block in `prospector.dashboard`.
+```bash
+launchctl unload ~/Library/LaunchAgents/com.prospector.paper-trade-insurance.plist
+```
+
+The other book continues unaffected. Books are independent at the
+launchd, portfolio-DB, and log-file levels.
 
 ---
 
-## Elder-Track Scripts (Paused)
-
-These scripts relate to the paused Elder-template parameter-search track.
-
-### Walk-Forward Top Configs
-
-Validates top-scoring configs from the orchestrator ledger with walk-forward analysis.
+## CLV scoring
 
 ```bash
-python scripts/walk_forward_top_configs.py
+python scripts/compute_clv.py                            # all positions, default lottery DB
+python scripts/compute_clv.py --status closed            # closed only
+python scripts/compute_clv.py --out clv-readout.parquet  # save per-trade
+python scripts/compute_clv.py --db data/paper/pm_underwriting_insurance/portfolio.db
 ```
+
+See [`components/clv-instrumentation.md`](../components/clv-instrumentation.md)
+for math and interpretation.
 
 ---
 
-## Background Services (launchd)
-
-| Service | plist | Schedule | Log |
-|---|---|---|---|
-| Paper trader | `~/Library/LaunchAgents/com.prospector.paper-trade.plist` | Every 15 min | `data/paper/pm_underwriting/logs/paper_trade-YYYYMMDD.log` |
-| Orderbook poller | `~/Library/LaunchAgents/com.prospector.orderbook.plist` | Persistent (KeepAlive) | `logs/orderbook.log` |
-| OHLCV refresh | `~/Library/LaunchAgents/com.prospector.ohlcv-refresh.plist` | Daily 2am | `logs/ohlcv-refresh.log` |
-
-The orderbook and OHLCV services are from the paused Elder track and run
-independently of the PM underwriting work.
+## Dashboard
 
 ```bash
-# Check status
-launchctl list | grep prospector
+pip install -e .[dashboard]              # one-time
+streamlit run scripts/dashboard.py        # localhost:8501
 
-# Stop/start
-launchctl stop com.prospector.orderbook
-launchctl start com.prospector.orderbook
+# Override manifest for smoke-testing
+PROSPECTOR_MANIFEST=/tmp/test_manifest.toml streamlit run scripts/dashboard.py
 ```
 
-### Manual Hyperliquid Data Commands
-
-```bash
-# Download OHLCV data
-python -m prospector.data.download
-
-# Start orderbook poller manually
-python -m prospector.data.orderbook
-
-# Run orchestrator with mock model (no Ollama needed)
-PROSPECTOR_MOCK=1 python -m prospector.orchestrator
-```
+Layout: single strategy → direct render; 2+ → top-level tabs with
+"Compare" first. See [`platform/dashboard.md`](../platform/dashboard.md).
 
 ---
 
-## Data Locations
+## Common failure modes
 
-| Path | Contents | Gitignored |
+### "Kalshi API key not provided"
+
+The user owns `KALSHI_API_KEY_ID` + `KALSHI_PRIVATE_KEY_PATH` in `.env`.
+Agents do not read or write `.env`. If the env is missing for a
+launchd-driven daemon, check the wrapper script's `cd` + venv activation.
+
+### "Schema mismatch reading parquet"
+
+Likely a partial backfill wrote with an older schema. Cause: a partition
+written before a `Market` dataclass field addition. Fix: re-pull or
+schema-retrofit the partition. See [`platform/data-pipeline.md`](../platform/data-pipeline.md)
+§12.4 for the canonical fix-up pattern.
+
+### "Daemon ticks but no entries"
+
+Most likely the calibration store is empty or out of date. Check
+`data/calibration/store/current.json` exists and points at a recent
+snapshot. Rebuild if needed (see above).
+
+Also check: `daily trade cap reached; skipping scan` in the log → cap
+already hit for the day; not a bug.
+
+### "Insurance daemon DB not found"
+
+The DB is created on first tick. If the daemon hasn't ticked yet (15-min
+cadence + `RunAtLoad: false`), wait or manually trigger via `launchctl
+start`.
+
+### "Tests pass locally but launchd shows non-zero exit"
+
+Wrapper script likely has a path issue or missing venv activation. Check
+`data/paper/pm_underwriting/logs/launchd.log` — bootstrap failures land
+there.
+
+---
+
+## Backups (informal)
+
+The user's machine is always-on per [`charter/operational-limits.md`](../charter/operational-limits.md).
+There's no formal backup of the paper portfolio DBs; if the machine fails:
+
+- The Kalshi data tree (`data/kalshi/`) is reproducible from the API
+  (~hours of wall time to re-pull) plus the TrevorJS HF source
+- The portfolio DBs (`data/paper/<book>/portfolio.db`) are NOT
+  reproducible — they are the live state of paper experiments
+- The git repo holds all code + docs; everything else is gitignored
+
+A formal backup story is a Phase 4 prerequisite (when live capital lives
+in real exchange accounts, not local SQLite).
+
+---
+
+## Decision log
+
+| Date | Decision | Rationale |
 |---|---|---|
-| `data/kalshi_hf/` | Kalshi HuggingFace dataset (markets + trades parquet) | Yes |
-| `data/calibration/` | Calibration curve outputs (plots, CSVs) | Yes |
-| `data/calibration/store/` | Persisted calibration snapshots (live-trading lookups) | Yes |
-| `data/paper/` | Paper-trading portfolio SQLite | Yes |
-| `data/ohlcv/` | Hyperliquid OHLCV parquet files | Yes |
-| `data/orderbook/` | Hyperliquid L2 snapshots | Yes |
-| `data/*.db` | SQLite databases (orchestrator ledger) | Yes |
-| `logs/` | Service logs | Yes |
-
----
-
-## Known Gotchas
-
-- **DuckDB memory:** The calibration scripts load ~140M trades into memory. Requires ~8 GB free RAM.
-- **`pytest` path:** Must use `PYTHONPATH=src pytest` from project root.
-- **WebSocket ping:** Hyperliquid doesn't respond to pings. `ping_interval=None` required in `websockets.connect()`.
-- **MacBook sleep:** Orderbook poller reconnects on wake (5s delay) but data will have gaps.
+| 2026-04-25 | Runbook reorganized to track docs reorg | Pointers updated to new platform/ + components/ locations; obsolete sections removed |

@@ -1,177 +1,329 @@
 # Terminology
 
-Definitions for all jargon used in the Prospector codebase and design documents.
+> Glossary of trading concepts and project-specific terms.
+
+For the formal definitions of pipeline stages and verdicts, see
+[`stages-and-verdicts.md`](stages-and-verdicts.md). For component
+mechanisms with full math, see [`../components/`](../components/).
+
+Some entries below are **legacy / Elder-track** terms — preserved for
+historical context (zero data loss). They're marked with `[legacy]` and
+won't appear in current strategy work.
 
 ---
 
-## Trading Concepts
+## Calibration & PM Underwriting
 
-**Bar / Candle**
-One time unit of OHLCV data. A "4h bar" represents four hours of trading, summarized as Open, High, Low, Close, Volume. "Bar index" (`bar_index`) is the zero-based row index in a DataFrame.
+**Beat-line rate**
+The fraction of resolved positions where CLV is positive (we beat the
+closing line). Standard sports-sharp metric. See
+[`../components/clv-instrumentation.md`](../components/clv-instrumentation.md).
 
-**Close** (of a bar)
-The last traded price during the bar's time window. Strategy logic fires on the close — signals are generated after a bar completes, not intra-bar.
+**Bin (5¢ price bin)**
+A 5-percentage-point slice of the implied-probability range used by the
+calibration curve and σ-table. Bins: 0-5%, 5-10%, ..., 95-100%.
 
-**Direction**
-Whether a trade is LONG (buy, profit if price rises) or SHORT (sell, profit if price falls). Defined as `Direction(str, Enum)` in `base.py`.
+**Calibration curve**
+Per-category mapping from implied-probability bin → empirical resolution
+rate. Built from historical resolved markets via PIT pricing. Deviations
+from 45° are tradeable edges. See
+[`../components/calibration-curves.md`](../components/calibration-curves.md).
+
+**Calibration store**
+Versioned on-disk snapshots of calibration curves at
+`data/calibration/store/calibration-<timestamp>.json`. The
+`current.json` pointer file says which snapshot is active. See
+[`../platform/calibration-store.md`](../platform/calibration-store.md).
+
+**CLV (Closing-Line Value)**
+Signed gap between entry price and the market's closing line.
+Positive = we beat the line. Stabilizes ~10× faster than realized P&L
+on low-WR / high-payoff books. See
+[`../components/clv-instrumentation.md`](../components/clv-instrumentation.md).
+
+**Edge (fee-adjusted)**
+`|implied_mid − actual_rate| − fee_roundtrip`. The portion of
+calibration deviation that survives Kalshi taker fees. The scanner
+filters by this. See
+[`../components/fee-modeling-kalshi.md`](../components/fee-modeling-kalshi.md).
+
+**Equal-σ sizing (risk parity)**
+Per-position sizing rule: `risk_budget = book_σ_target × NAV /
+(σ_i × √N_target)`, clipped by `max_position_frac × NAV`. Each position
+contributes uniformly to book-level σ. See
+[`../components/equal-sigma-sizing.md`](../components/equal-sigma-sizing.md).
+
+**Insurance book**
+PM Underwriting variant scoped to 0.55-0.75 entry-price band — the slice
+where the actuarial premium actually lives (high WR, small wins, low
+variance). See [`../rd/candidates/04-pm-underwriting-insurance.md`](../rd/candidates/04-pm-underwriting-insurance.md).
+
+**Kalshi binary contract**
+A market that pays $1 if the named event happens ("yes") and $0
+otherwise ("no"). Yes and no prices sum to 1.0 (up to fee wedge).
+
+**Kalshi position limit**
+Per-user cap on contract count per market. Affects the small-player
+maker-side reflexivity candidate ([12](../rd/candidates/12-kalshi-maker-reflexivity.md)).
+
+**Lottery book**
+PM Underwriting default (full price range) — edge ranker pulls to
+85-99¢ extremes naturally, producing a 9:1 lottery payoff. See
+[`../rd/candidates/01-pm-underwriting-lottery.md`](../rd/candidates/01-pm-underwriting-lottery.md).
+
+**Maker / Taker**
+Maker = resting limit order (zero fees on Kalshi). Taker = crossing the
+spread (`0.07 × P × (1-P)` per side). The paper book uses a
+conservative round-trip-taker assumption.
+
+**PIT (Point-In-Time) pricing**
+Market price at 50% of contract duration (`open_time + (close_time -
+open_time) / 2`), found via DuckDB ASOF join. Used to avoid the
+terminal-price convergence bias. Imported from sibling project
+`kalshi-autoagent` lesson.
+
+**Sell-yes / Buy-yes**
+Position sides on a Kalshi binary. Sell-yes wins if the event doesn't
+happen; buy-yes wins if it does. The scanner determines side by
+comparing `actual_rate` to `implied_mid`.
+
+**Shadow rejection ledger**
+Append-only parquet log of candidates rejected by the 28-day expiry
+screen (and other structural screens). Enables counterfactual replay.
+See [`../components/shadow-rejection-ledger.md`](../components/shadow-rejection-ledger.md).
+
+**σ-table**
+Pre-computed JSON at `data/calibration/sigma_table.json` with per-(category,
+side, 5¢ bin) σ from the walk-forward test set. Used by equal-σ sizing.
+
+**Subseries / Series**
+Subseries = event_ticker minus its trailing segment (e.g., NFL game
+sub-markets). Series = `series_ticker` (e.g., `KXNFL`). Both used as
+diversity-cap dimensions in the portfolio.
+
+---
+
+## Trading concepts (cross-strategy)
 
 **Drawdown (DD)**
-Peak-to-trough decline in account value (NAV). Expressed as a percentage of the peak. `max_drawdown = (peak - trough) / peak`. See also: DD penalty.
-
-**DD Penalty**
-The quadratic penalty applied to the primary score when max drawdown exceeds 20%. Formula: `((max_dd - 0.20) / 0.10)² × 200`. Quadratic, not linear, because deep drawdowns are disproportionately costly (capital destruction, psychological cost). Below 20% = no penalty.
-
-**EMA (Exponential Moving Average)**
-A moving average that weights recent data more than older data. Controlled by a `span` (period) parameter. Used for trend detection (slow EMA slope) and value zone identification (fast EMA). Implemented with `pd.Series.ewm(span=N, adjust=False).mean()`.
-
-**Entry**
-The intended execution price for a trade. For LONG: price to buy at. For SHORT: price to sell at. Part of the Iron Triangle.
-
-**Force Index**
-Elder's momentum oscillator: `close.diff() × volume`. Measures force behind price moves. 2-period EMA of force index (`force_index_2`) is the preferred entry oscillator in Triple Screen.
-
-**Funding Rate**
-A periodic payment between long and short holders in perpetual futures, keeping the futures price anchored to spot. Positive funding = longs pay shorts; negative = shorts pay longs. Applied every 8 hours on Hyperliquid. Significant for strategies holding positions overnight. Historical funding data availability from Hyperliquid API is an open question.
+Peak-to-trough decline in NAV. Expressed as % of peak.
+`max_drawdown = (peak − trough) / peak`.
 
 **HWM (High-Water Mark)**
-The highest NAV value reached by the simulated account at any point. Used to calculate drawdown: `drawdown = (HWM - current_nav) / HWM`.
+Highest NAV reached. Used to compute drawdown.
 
-**Iron Triangle**
-The three-legged risk framework enforced on every trade: (1) entry price, (2) stop-loss, (3) profit target, with ≥ 2:1 reward:risk ratio and 2% NAV risk per trade. Named for the three sides that form a trade's geometry. Enforced by `Signal.__post_init__` (geometry) and the harness (sizing).
-
-**L2 / Level 2 / Order Book**
-The full depth of buy (bid) and sell (ask) orders at each price level. "L2 snapshot" = point-in-time capture of the top N levels per side. Used to model slippage (the cost of walking the book). Hyperliquid only exposes the current book state via API — no historical L2 is available.
-
-**MACD (Moving Average Convergence Divergence)**
-Momentum indicator: difference between fast EMA and slow EMA, plus a "signal line" (EMA of the difference) and "histogram" (MACD minus signal). MACD Histogram measures momentum acceleration/deceleration.
-
-**Mid Price**
-The average of best bid and best ask: `(bid + ask) / 2`. Used as a reference price for spread calculations and range width normalization.
+**MVT (Marginal Value Theorem)**
+Charnov 1976. Optimality model from foraging ecology: leave a patch
+when in-patch capture rate drops to the long-run average across the
+habitat. Adapted to scanner admission as a rolling-quality threshold.
+See [`../components/mvt-rolling-threshold.md`](../components/mvt-rolling-threshold.md).
 
 **NAV (Net Asset Value)**
-The current simulated account value, including unrealized P&L. Replaces informal terms like "bankroll" or "equity." `NAV_INITIAL = $10,000`, `NAV_CEILING = $20,000`, `NAV_CATASTROPHIC = $5,000`.
+Current book value: `nav = initial_nav + sum(realized_pnl over closed
+positions)`. Open positions valued at committed capital (book value),
+not mark-to-market. Default initial NAV is $10,000 per book.
 
-**OHLCV**
-Open, High, Low, Close, Volume — the five standard columns of candlestick bar data. All DataFrames in Prospector must include these plus a `timestamp` column (UTC, timezone-aware).
-
-**Perp / Perpetual Future**
-A derivative that tracks an underlying asset's price without an expiry date. Hyperliquid trades crypto perps (e.g., BTC-PERP, ETH-PERP). Perps use a funding rate mechanism to stay anchored to spot price.
-
-**PIT Pricing (Point-In-Time)**
-Prices as they were at a specific historical moment, not current prices. The kalshi-autoagent bug used stale terminal prices instead of PIT prices, inflating backtest scores from 45 to 140. The harness must use only prices that were knowable at the time of the bar.
-
-**Profit Factor (PF)**
-`gross_profit / gross_loss`. A PF of 1.0 means the strategy broke even before costs. Hard gate: PF > 1.3 required to pass to scoring.
-
-**R:R / Reward-Risk Ratio**
-`reward / risk = |target - entry| / |entry - stop|`. Hard minimum: 2:1 (every trade must offer at least twice as much potential gain as potential loss). Enforced at signal generation time and checked again by the harness. `MIN_REWARD_RISK = 2.0` in `base.py`.
-
-**Resistance**
-A price level where selling pressure historically has stopped upward moves. In `false_breakout`, resistance = `max(high)` over the lookback window.
-
-**RSI (Relative Strength Index)**
-Momentum oscillator ranging 0–100. Below 30 is traditionally "oversold" (entry for longs); above 70 is "overbought" (entry for shorts).
-
-**Sharpe Ratio**
-Risk-adjusted return: `mean(trade_returns) / std(trade_returns)`, annualized. Captures consistency, not just magnitude. High score + low Sharpe = lucky streak on few trades.
-
-**Signal**
-A trade instruction produced by a strategy template. Fields: `bar_index`, `direction`, `entry`, `stop`, `target`. Implemented as a frozen dataclass in `base.py` with geometry validation in `__post_init__`.
+**Sharpe ratio**
+Risk-adjusted return: `mean(returns) / std(returns)`, annualized.
 
 **Slippage**
-The difference between the expected execution price and the actual fill price, caused by insufficient liquidity at the target price. The harness models slippage as a flat cost per trade (initially 0.05% per side). Calibrated from live orderbook data as it accumulates.
+Difference between expected and actual fill price. Modeled by using
+executable prices (yes_bid for sell_yes, 1−no_bid for buy_yes) rather
+than mids in the scanner.
 
 **Spread**
-The difference between the best ask and best bid: `ask - bid`. Represents the minimum transaction cost for a round-trip trade. `spread_pct = spread / mid_price`.
+`ask − bid`. Minimum round-trip transaction cost.
 
-**Stochastic**
-Momentum oscillator: `(close - N-bar low) / (N-bar high - N-bar low) × 100`. Below 20 is oversold; above 80 is overbought.
+**Walk-forward validation**
+Train/test split with multiple non-overlapping windows. Required before
+any strategy promotes from stat-exam to backtest. See
+[`methodology.md`](methodology.md).
 
-**Stop (Stop-Loss)**
-The price at which a losing trade is exited to cap the loss. For LONG: stop < entry. For SHORT: stop > entry. Part of the Iron Triangle.
-
-**Support**
-A price level where buying pressure historically has stopped downward moves. In `false_breakout`, support = `min(low)` over the lookback window.
-
-**Target (Profit Target)**
-The price at which a winning trade is exited to take profit. For LONG: target > entry. For SHORT: target < entry. Part of the Iron Triangle.
-
-**TF (Timeframe)**
-The duration of a single bar: `1h` (1 hour), `4h` (4 hours), `1d` (1 day), etc. Multiple timeframes are used by Triple Screen: higher-TF for trend direction, lower-TF for entry timing.
-
-**Walk-Forward Validation**
-A testing methodology that uses rolling train/test windows advancing through time. Prevents overfitting by ensuring the strategy is always tested on data it was never trained on. Required before any strategy is promoted to paper trading.
-
-**Win Rate (WR)**
-`winning_trades / total_trades`. Misleading in isolation — a 30% WR strategy with 5:1 payoff is excellent. Always interpret alongside profit factor and R:R.
+**Win rate (WR)**
+`winning_trades / total_trades`. Misleading in isolation — a 30% WR
+strategy with 5:1 payoff is excellent. Always interpret alongside
+payoff ratio and Sharpe.
 
 ---
 
-## System Concepts
-
-**Append-Only Ledger**
-The SQLite database recording every discovery loop iteration. Records are never updated or deleted. The sliding window reads from this. Lessons from sibling projects: never truncate; don't react to < 20 iterations.
-
-**Cold Start**
-The first iteration of the discovery loop, when the sliding window is empty. The orchestrator uses a baseline prompt with no historical results injected.
-
-**Diversity Rule**
-The orchestrator rejects proposals that are too similar to recent ones. Same template + same securities + normalized Euclidean parameter distance < 0.15 = duplicate. Different templates are always diverse.
-
-**Hard Gate**
-A pass/fail filter applied before scoring. Current gates: ≥ 20 trades, PF > 1.3, ≥ 2:1 R:R per trade. Runs that fail a gate are logged with status `rejected` and no numeric score.
-
-**Inner Loop**
-The automated discovery process: LLM proposes → harness evaluates → result logged → repeat. The small model (13B) is the inner loop's intelligence. Runs continuously in the background.
-
-**Iron Triangle**
-See under Trading Concepts above.
-
-**launchd**
-macOS process management system (analogous to systemd on Linux). Used to keep the orderbook poller running persistently and to schedule the nightly OHLCV refresh. Plist files live in `~/Library/LaunchAgents/`.
-
-**LoRA (Low-Rank Adaptation)**
-A parameter-efficient fine-tuning technique that trains small adapter matrices on top of a frozen base model. Used periodically (not the primary feedback mechanism) to encode long-term lessons that don't fit in the context window. The sliding window is the primary feedback signal.
-
-**Outer Loop**
-Human + Claude/Opus review of accumulated results. Identifies structural gaps, authors new strategy templates, widens parameter ranges. Happens infrequently (not automated). The inner loop searches within the current space; the outer loop expands the space.
-
-**Paper Portfolio / Paper Trading**
-Forward-testing a promoted config against live market data without placing real orders. Validates that backtest results hold on unseen data before risking capital.
-
-**Sample Penalty**
-A penalty applied when a backtest produces fewer than 20 trades. Formula: `(20 - n_trades) × 10`. The hard gate rejects at <20 trades; the penalty adds a gradient so barely-passing configs score lower than configs with many trades.
-
-**Sliding Window**
-The last N backtest results (typically 10–20) formatted as a table and injected into the LLM's prompt. The model uses this to reason about which regions of strategy space are exhausted vs. unexplored. The primary feedback mechanism (LoRA is secondary).
-
-**Stagnation**
-When the inner loop produces N consecutive failures (all same template, all rejected, or declining scores). Triggers perturbation: inject a directive into the prompt to explore a different template or parameter region.
-
-**Template**
-A human-authored Python module implementing one strategy pattern. Takes OHLCV data + config dict, returns a list of Signals. Contains all execution logic. The LLM never writes template code — it only selects which template to use and what parameters to pass.
-
-**Two-Loop Pattern**
-The architecture proven in kalshi-autoagent: inner loop (small model) searches within a defined space; outer loop (human/Claude) expands the space when the inner loop saturates. Neither does the other's job.
-
-**Vertical Slice**
-Units 1–3 of the implementation plan: download data → implement one template → run a scored backtest. Validates the core pipeline without LLM involvement. All data quality, template, and harness bugs surface here before the loop adds complexity.
-
----
-
-## Hyperliquid-Specific
+## Crypto / venue-specific
 
 **BTC-PERP, ETH-PERP, SOL-PERP**
-The initial POC security universe. Hyperliquid uses the suffix format (e.g., `BTC-PERP`), but the API `candleSnapshot` endpoint requires the base name without the suffix (e.g., `BTC`). `HyperliquidClient._coin()` handles this stripping.
+Hyperliquid perpetual-futures tickers. API `candleSnapshot` requires
+the base name without `-PERP` suffix; `HyperliquidClient._coin()`
+strips it.
 
-**candleSnapshot**
-Hyperliquid REST API endpoint for historical OHLCV data. Max 5000 candles per request. Returns bars as dicts with keys `t` (open time ms), `T` (close time ms), `o`, `h`, `l`, `c`, `v`, `n` (trade count), `i` (interval), `s` (symbol).
+**Funding rate**
+Periodic payment between longs and shorts on a perpetual future,
+keeping perp price anchored to spot. Hyperliquid pays hourly. Positive
+funding = longs pay shorts. Available as full-history time series.
 
-**l2Book**
-Hyperliquid WebSocket subscription for live order book data. Returns current book state only — no historical data. Top 10 levels per side stored as parquet.
+**HIP-3**
+Hyperliquid Improvement Proposal 3 — builder-deployed perpetuals via
+Dutch auction. Anyone with ≥500K HYPE staked can launch. Live since
+2025-10-13. See [`external-landscape.md`](external-landscape.md).
 
-**merge_asof**
-A pandas function for time-based approximate joins. Used in `triple_screen.py` to align higher-timeframe trend values to lower-timeframe bars: for each lower-TF bar, it finds the most recent higher-TF bar with a timestamp ≤ the short-TF bar's timestamp.
+**HIP-4**
+Hyperliquid event perpetuals. Co-developed with Kalshi. Testnet 2026-02-02;
+mainnet TBD. See [`external-landscape.md`](external-landscape.md).
 
-**POC (Proof of Concept)**
-The initial limited scope: 3 symbols (BTC-PERP, ETH-PERP, SOL-PERP), 2 templates, 1 backtest harness, 1 LLM loop. Validates the architecture before expanding.
+**L2 / Order book**
+Full bid/ask depth at each price level. Hyperliquid exposes current
+state via API but no historical L2. Kalshi orderbook is retention-gated
+with no historical alternative — must capture forward in time.
+
+**Mid price**
+`(bid + ask) / 2`. Reference price for spread calculations.
+
+**Perp / Perpetual future**
+Derivative tracking an underlying price without expiry. Funding-rate
+mechanism keeps it anchored to spot.
+
+---
+
+## Stages and verdicts
+
+(See [`stages-and-verdicts.md`](stages-and-verdicts.md) for the full spec.)
+
+**Stage** — where in the pipeline: `ideation`, `deep-dive`,
+`statistical-examination`, `backtest`, `paper-portfolio`,
+`live-trading`, `rejected`, `absorbed`.
+
+**Verdict** — judgment at the current stage: `pending`,
+`needs-iteration`, `viable`, `non-viable`.
+
+**Non-viable** has a high bar: requires explicit reasoning that no
+variant, overlay, or scale change could rescue the candidate.
+
+**Absorbed** — the candidate's finding was folded into another strategy
+(e.g., #10 vol surface absorbed into PM Phase 5 hedging overlay). Not
+the same as `rejected`.
+
+---
+
+## OHLCV & data layer
+
+**Candle / Bar**
+One time-unit of OHLCV data (Open, High, Low, Close, Volume). "4h
+bar" = four hours summarized.
+
+**OHLCV**
+Open, High, Low, Close, Volume — five standard columns of
+candlestick data. Plus a UTC `timestamp` column.
+
+**Parquet partition / tree**
+Hive-style date-partitioned parquet at `data/kalshi/{trades,markets}/date=YYYY-MM-DD/part.parquet`.
+Trivially pruneable for time-bounded queries; immutable once written.
+
+**Watermark**
+Per-ticker timestamp + trade-id state file at `data/kalshi/_state.json`
+that the incremental Kalshi pull uses to know where to resume. Separate
+from the data itself.
+
+---
+
+## System concepts (current)
+
+**Append-only memory / decision log**
+Every component, candidate, and charter doc has a decision log at the
+bottom. Append-only — never edit prior entries; reversals are new
+entries that reference the prior one.
+
+**Append-only candidate catalog**
+`docs/rd/candidates/` — every strategy idea ever logged stays. Verdict
+changes; the file doesn't disappear.
+
+**launchd**
+macOS process management. Used for the daily data cron and the
+paper-trade daemons (one plist per book). See
+[`runbook.md`](runbook.md).
+
+**Paper portfolio / Paper trading**
+Forward-testing a strategy against live market data without placing
+real orders. The two PM Underwriting books currently in production are
+both paper.
+
+**Pre-registration**
+Locking hyperparameters + pass criteria + null benchmark *in code*
+before the test fold runs. Not allowed to retro-fit. See
+[`methodology.md`](methodology.md).
+
+---
+
+## Legacy (Elder-track and original-design terms)
+
+These are preserved for historical context. The Elder track was
+[rejected as non-viable](../rd/candidates/00-elder-templates.md);
+these terms appear in archived docs and the orchestrator/templates
+modules but are not used in current PM Underwriting work.
+
+**Bar index `[legacy]`**
+Zero-based row index in an OHLCV DataFrame. Elder-track concept.
+
+**DD penalty `[legacy]`**
+Quadratic drawdown penalty applied to Elder template scoring. Formula:
+`((max_dd − 0.20) / 0.10)² × 200`.
+
+**Direction (LONG/SHORT) `[legacy]`**
+Trade direction in Elder templates. Defined as `Direction(str, Enum)`
+in `base.py`.
+
+**Discovery loop / Inner loop / Outer loop `[legacy]`**
+Two-loop architecture. Inner = LLM proposes configs, harness evaluates.
+Outer = human review + new template authoring. Falsified for
+continuous-parameter search; codified into [axiom 5](../charter/axioms.md)
+that LLMs are categorical reasoners, not optimizers.
+
+**EMA, Force Index, MACD, RSI, Stochastic `[legacy]`**
+Technical indicators used in Elder triple-screen template. See archived
+template code if relevant.
+
+**Iron Triangle `[legacy]`**
+Elder-track risk framework: entry + stop + target with ≥2:1 R:R, 2%
+NAV risk per trade. Replaced by equal-σ sizing in PM Underwriting.
+
+**Profit Factor (PF) `[legacy]`**
+`gross_profit / gross_loss`. Hard gate PF > 1.3 in Elder track. Not used
+in current work.
+
+**R:R / Reward-Risk Ratio `[legacy]`**
+`reward / risk`. Elder hard minimum 2:1.
+
+**Resistance / Support `[legacy]`**
+Price levels in Elder false-breakout template.
+
+**Sample Penalty `[legacy]`**
+Penalty in Elder scoring for backtest n_trades < 20.
+
+**Signal `[legacy]`**
+Elder-template trade instruction dataclass. Fields: bar_index,
+direction, entry, stop, target.
+
+**Sliding Window `[legacy]`**
+The last N backtest results injected into the LLM prompt in the Elder
+inner loop. Not used in current work.
+
+**Stagnation `[legacy]`**
+Elder-track inner-loop heuristic: N consecutive failures → perturb the
+prompt.
+
+**Template `[legacy]`**
+Elder-track strategy module pattern. `triple_screen` and
+`false_breakout` were the two implementations.
+
+**TF (Timeframe) `[legacy]`**
+Elder-track concept: bar duration. Multiple TFs used in triple_screen
+(higher TF for trend, lower for entry).
+
+**Vertical Slice `[legacy]`**
+Elder-track implementation milestone (Units 1-3): download data →
+template → backtest.
+
+---
+
+## Decision log
+
+| Date | Decision | Rationale |
+|---|---|---|
+| (initial) | Glossary created from Elder-track design docs | Canonical definitions for inner-loop concepts |
+| 2026-04-25 | Restructured + added PM Underwriting, calibration, stages-and-verdicts sections | Reorg; legacy Elder-track terms preserved with `[legacy]` marker |

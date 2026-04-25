@@ -344,3 +344,51 @@ def test_expiry_screen_no_shadow_root_means_no_parquet(
     report = run_once(client, portfolio, calibration, sigma_table, config, now=now)
     assert report.shadow_rejected == 1
     assert not portfolio.has_open_position("LONG")
+
+
+def test_entry_price_band_excludes_out_of_band_candidates(
+    portfolio, calibration, sigma_table
+):
+    """Insurance-book scoping: with a 0.55-0.75 band, candidates entering
+    at 0.82-0.84 (the calibration's signal range) are filtered out."""
+    markets = [
+        _mkt("HI1", event_ticker="KXNFL-E1"),
+        _mkt("HI2", event_ticker="KXNFL-E2"),
+    ]
+    obs = {
+        "HI1": _ob(yes=[(0.82, 500)], no=[(0.17, 500)]),
+        "HI2": _ob(yes=[(0.83, 500)], no=[(0.16, 500)]),
+    }
+    client = FakeClient(markets, obs)
+    config = RunnerConfig(entry_price_min=0.55, entry_price_max=0.75)
+    report = run_once(client, portfolio, calibration, sigma_table, config)
+    assert report.entered == 0
+    assert portfolio.state().open_positions == 0
+
+
+def test_entry_price_band_includes_in_band_candidates(
+    portfolio, calibration, sigma_table
+):
+    """Same fixture, looser band that includes 0.82-0.84 — entries proceed."""
+    markets = [
+        _mkt("HI1", event_ticker="KXNFL-E1"),
+        _mkt("HI2", event_ticker="KXNFL-E2"),
+    ]
+    obs = {
+        "HI1": _ob(yes=[(0.82, 500)], no=[(0.17, 500)]),
+        "HI2": _ob(yes=[(0.83, 500)], no=[(0.16, 500)]),
+    }
+    client = FakeClient(markets, obs)
+    config = RunnerConfig(entry_price_min=0.70, entry_price_max=0.95)
+    report = run_once(client, portfolio, calibration, sigma_table, config)
+    assert report.entered == 2
+
+
+def test_entry_price_band_default_is_full_range(portfolio, calibration, sigma_table):
+    """Default RunnerConfig (no band overrides) accepts the full [0, 1]
+    range — preserves the lottery-book behavior."""
+    markets = [_mkt("T1", event_ticker="KXNFL-E1")]
+    obs = {"T1": _ob(yes=[(0.82, 500)], no=[(0.17, 500)])}
+    client = FakeClient(markets, obs)
+    report = run_once(client, portfolio, calibration, sigma_table, RunnerConfig())
+    assert report.entered == 1

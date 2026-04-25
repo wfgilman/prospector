@@ -50,6 +50,14 @@ class RunnerConfig:
     max_days_to_close: int = 28
     # Where shadow rejections are written. Usually the paper-portfolio root.
     shadow_ledger_root: Path | None = None
+    # Entry-price band — used to scope a book to a slice of the calibration
+    # surface. Defaults `(0, 1)` keep the lottery-book behavior (edge/σ pulls
+    # to 85-99¢ extremes naturally). Setting e.g. `(0.55, 0.75)` builds an
+    # "insurance" book: high-WR, low-variance favorites at moderate prices.
+    # Filter is applied AFTER the σ-rank, so candidates outside the band
+    # never enter regardless of edge magnitude. See fresh-eyes-review §4 (T1).
+    entry_price_min: float = 0.0
+    entry_price_max: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -131,6 +139,14 @@ def run_once(
         if entered >= remaining_today:
             break
         if portfolio.has_open_position(candidate.market.ticker):
+            continue
+
+        # Entry-price band filter — scopes the book to a slice of the
+        # calibration surface (e.g. insurance band 0.55-0.75).
+        if (
+            candidate.entry_price < config.entry_price_min
+            or candidate.entry_price > config.entry_price_max
+        ):
             continue
 
         # Structural expiry screen: reject markets resolving past the

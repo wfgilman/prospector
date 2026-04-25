@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.prospector.paper-trade-insurance</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/wgilman/workspace/prospector/scripts/paper_trade_insurance_launchd.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/wgilman/workspace/prospector</string>
+
+    <!-- Every 15 minutes, offset 7 minutes from the lottery-book tick so
+         both books don't hammer the Kalshi API simultaneously. The first
+         fire happens after StartInterval has elapsed (RunAtLoad is false). -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Wrapper redirects to a dated log; launchd-captured streams should
+         stay empty, but we catch bootstrap failures here anyway. -->
+    <key>StandardOutPath</key>
+    <string>/Users/wgilman/workspace/prospector/data/paper/pm_underwriting_insurance/logs/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/wgilman/workspace/prospector/data/paper/pm_underwriting_insurance/logs/launchd.log</string>
+</dict>
+</plist>

@@ -29,8 +29,9 @@ For the paused Elder-template parameter-search track, see [`docs/implementation/
 | 1 | Calibration curve | **Complete** | GO — 6 qualifying bins aggregate, 16 in sports parlays. Systematic overpricing confirmed. |
 | 2 | Walk-forward backtest | **Complete** | GO — Sharpe 7.44, 66.9% WR, 83.6K trades. Calibration holds out-of-sample. |
 | 2b | Capital-constrained simulation | **Complete** | GO at 20 trades/day: Sharpe 9.19, 303% return/41d, 3.4% max DD. Sports dominates (86% of trades). |
-| 3 | Paper trading | **In progress** | Live via launchd since 2026-04-20; relaunched 2026-04-21 on equal-σ sizing (§3.5). |
+| 3 | Paper trading (lottery book) | **In progress** | Live via launchd since 2026-04-20; relaunched 2026-04-21 on equal-σ sizing (§3.5). |
 | 3.5 | Sizing-framework reevaluation | **Complete (2026-04-21)** | Equal-σ + σ-table shipped. Kelly retired. Per-bin cap replaces category cap. Full log: [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md). |
+| 3-insurance | **Insurance-slice book (parallel)** | **Shipped 2026-04-25** | Same daemon, scoped to 0.55-0.75 entry-price band. Separate portfolio DB at `data/paper/pm_underwriting_insurance/`. Tests the original "actuarial underwriting" thesis on the bins where it belongs. See §Phase 3-insurance below. |
 | 4 | Live (small) | Pending | 5% of intended NAV after Phase 3 results + sizing decision. |
 | 5 | **Hedging overlay (optional)** | **Scoped 2026-04-22** | Delta-hedge the crypto slice via Hyperliquid perps; preserves optionality without committing capital now. See §Phase 5 below. |
 
@@ -167,6 +168,33 @@ Mid-Phase-3 we surfaced a structural mismatch between the sizing framework and t
 Full decision log and math: [`docs/rd/sizing-reevaluation.md`](../rd/sizing-reevaluation.md).
 
 ---
+
+## Phase 3-insurance — Insurance-Slice Book (Shipped 2026-04-25)
+
+A second paper book runs alongside the lottery book on the same daemon, scoped to the 0.55-0.75 entry-price band. The original deep-dive prospectus described the strategy as "writing many small policies" — the insurance metaphor — but the lottery book's edge ranker (`edge/σ`) systematically pulls to 85-99¢ extremes because σ ramps up there and the per-position cap is binding. The 9:1 lottery-ticket payoff that emerges from this is fine, but it's not what the prospectus described.
+
+The insurance book pins the band where the actuarial premium actually lives. From Phase 1: sports has 16/20 signal bins concentrated at mid-to-high implied; the 55-75¢ slice is where small-edge-many-trials compounds with low variance.
+
+### Implementation
+
+Same daemon (`scripts/paper_trade.py`), parametrized via `RunnerConfig.entry_price_min` / `entry_price_max`. Filter applied after the σ-rank: candidates outside the band are dropped before entry. Calibration store and σ-table are shared with the lottery book.
+
+- Wrapper: `scripts/paper_trade_insurance_launchd.sh`
+- Plist: `scripts/launchd/com.prospector.paper-trade-insurance.plist` (15-min cadence, mirrors lottery)
+- Portfolio DB: `data/paper/pm_underwriting_insurance/portfolio.db`
+- Min edge: 3pp (lower than lottery's 5pp because mid-bin edges are smaller; will tune from realized data)
+- Initial NAV: $10K independent of lottery book
+
+### Pre-committed kill criterion
+
+Stop the insurance book if any of:
+- 30-day paper Sharpe < 0.5 after fees
+- Beat-line rate (CLV-based) < 50% over 30 days
+- Calibration breaks: realized hit rate diverges from calibration prediction by >5pp on the entered bins
+
+### What this validates
+
+Whether the original prospectus thesis was right *for the right bins*. If the insurance book outperforms its kill criterion while the lottery book trades the same calibration surface at extreme prices, both books co-exist and the strategy family has two clean expressions. If it fails, the calibration edge is genuinely concentrated at extremes and the lottery framing is the strategy.
 
 ## Phase 4 — Live (Small)
 

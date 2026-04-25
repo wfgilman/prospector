@@ -99,6 +99,24 @@ CREATE TABLE IF NOT EXISTS daily_snapshots (
     trades_today INTEGER NOT NULL,
     realized_pnl_today REAL NOT NULL
 );
+
+-- Per-ticker market-state snapshots used to compute CLV (closing-line value).
+-- The monitor writes one row each time it fetches a market for an open
+-- position; the latest row for a (ticker, <= close_time) pair is the
+-- "closing line" reference for that trade. This is decoupled from the
+-- daily Kalshi-tree cron, which only covers a narrow KXBTC/FED slice.
+CREATE TABLE IF NOT EXISTS clv_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    snapshot_time TEXT NOT NULL,
+    yes_bid REAL,
+    yes_ask REAL,
+    last_price REAL,
+    market_status TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_clv_ticker_time
+    ON clv_snapshots(ticker, snapshot_time);
 """
 
 
@@ -563,6 +581,36 @@ class PaperPortfolio:
                     float(realized_today),
                 ),
             )
+
+    def record_clv_snapshot(
+        self,
+        ticker: str,
+        *,
+        yes_bid: float | None,
+        yes_ask: float | None,
+        last_price: float | None,
+        market_status: str | None,
+        snapshot_time: datetime | None = None,
+    ) -> None:
+        """Record one bid/ask snapshot for CLV reconstruction.
+
+        Called by the monitor on every market fetch; one row per fetch.
+        Cheap (single insert) and append-only — fine to call every tick.
+        """
+        snapshot_time = snapshot_time or datetime.now(timezone.utc)
+        self._conn.execute(
+            """INSERT INTO clv_snapshots(
+                ticker, snapshot_time, yes_bid, yes_ask, last_price, market_status
+            ) VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                ticker,
+                snapshot_time.isoformat(),
+                yes_bid,
+                yes_ask,
+                last_price,
+                market_status,
+            ),
+        )
 
     def _fetch(self, pos_id: int) -> PaperPosition:
         row = self._conn.execute(

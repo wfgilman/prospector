@@ -44,6 +44,15 @@ def sweep(client: KalshiClient, portfolio: PaperPortfolio) -> MonitorReport:
             logger.warning("fetch_market failed for %s", pos.ticker)
             errors += 1
             continue
+        # Always record a CLV snapshot (open or settled) — the latest snapshot
+        # before resolution becomes the closing-line reference for this trade.
+        portfolio.record_clv_snapshot(
+            pos.ticker,
+            yes_bid=market.yes_bid,
+            yes_ask=market.yes_ask,
+            last_price=market.last_price,
+            market_status=market.status,
+        )
         status = market.status.lower()
         result = market.result.lower()
         if status in ("settled", "finalized") and result in ("yes", "no"):

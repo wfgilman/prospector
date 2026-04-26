@@ -1,6 +1,7 @@
 # Prospector — Agent Quick-Start
 
-This file is the first thing a new agent session should read. It answers "where are we?" without requiring a full doc review.
+Entry point for any agent session. Read this first; it tells you where to
+look for what without requiring a full doc review.
 
 ---
 
@@ -8,137 +9,157 @@ This file is the first thing a new agent session should read. It answers "where 
 
 **Commit and push directly to `main`. No feature branches, no pull requests.**
 
-The project is in R&D — the user is solo, paper-trading, has small kids and limited engagement bandwidth. PR review process is overhead that doesn't earn its weight at this stage. We deploy and fix if necessary; correctness is enforced by tests + ruff + the methodology discipline in `docs/implementation/methodology.md`, not by PR review.
+The project is in R&D — solo operator, paper-trading only, sparse
+engagement. PR review process is overhead that doesn't earn its weight at
+this stage. We deploy and fix if necessary; correctness is enforced by
+tests + ruff + the methodology discipline in
+[`docs/reference/methodology.md`](docs/reference/methodology.md), not by
+PR review.
 
-This **overrides** the global `~/AGENTS.md` "feature branch + PR" mandate while in R&D mode.
+This **overrides** the global `~/AGENTS.md` "feature branch + PR" mandate
+while in R&D mode.
 
-**Revisit when:** the project transitions to Phase 4 (live, real capital) or the user explicitly asks. At that point, the feature-branch + PR workflow comes back automatically.
+**Revisit when:** Phase 4 (live, real capital) or the user explicitly
+asks. At that point, feature-branch + PR workflow comes back automatically.
 
 What stays the same regardless:
 - Run ruff + the full test suite before pushing
 - Conventional-commit subject lines (`feat:`, `fix:`, `chore:`, etc.)
-- Never skip hooks, never force-push to main, never amend published commits
+- Never skip hooks, never force-push to `main`, never amend published commits
 - Stage files explicitly (no `git add -A`)
-- The other Git Safety Rules in `~/AGENTS.md` still apply
+- All other Git Safety Rules in `~/AGENTS.md` still apply
 
 ---
 
-## What This Project Is
+## What this project is
 
-**Prospector** is a locally-hosted trading strategy discovery and deployment system. Originally designed for LLM-driven parameter search on crypto perpetual futures (paused — see R&D docs), the project pivoted to **Prediction Market Underwriting**: applying actuarial calibration curves to Kalshi prediction markets.
+**Prospector** is a locally-hosted trading strategy discovery and
+deployment system. The active strategy family is **PM Underwriting** —
+applying actuarial calibration curves to Kalshi prediction markets via
+two parallel paper books (lottery + insurance variants). The original
+LLM-driven Elder-template parameter search was rejected as non-viable
+2026-04-14.
 
-The full strategy prospectus is in `docs/rd/deep-dive-prediction-market-underwriting.md`. The build plan is in `docs/implementation/plan.md`.
-
----
-
-## Current Status (as of 2026-04-21)
-
-**Active track: PM Underwriting — Phase 3 live paper trading with sizing reevaluation**
-
-| Phase | Description | Status | Result |
-|---|---|---|---|
-| 1 | Calibration curve | **Complete** | GO — 6 qualifying bins aggregate, 16 in sports. |
-| 2 | Walk-forward backtest | **Complete** | GO — Sharpe 7.44, 66.9% WR, calibration holds OOS. |
-| 2b | Capital-constrained simulation | **Complete** | GO — Sharpe 9.19 at 20 trades/day, 303% return/41d. |
-| 3 | Paper trading | **In progress** | Live since 2026-04-20 via launchd. Diversity + fees wired. |
-| 3.5 | Sizing-framework reevaluation | **In progress** | Kelly-per-bet under review; moving toward CI-based book-level sizing. See `docs/rd/sizing-reevaluation.md`. |
-| 4 | Live (small) | Pending | Gated on Phase 3 results + sizing decision. |
-
-**Two confirmed edges:**
-1. Sports parlay overpricing (large, ~6 months history, prospect theory)
-2. Crypto longshot overpricing (moderate, more persistent, favorite-longshot bias)
-
-**Payoff profile note:** ranking candidates by edge systematically selects extreme-price bins (80-95¢), which are 9:1 *lottery-ticket* payoffs, not the win-often/lose-small insurance profile implied by the "underwriting" label. See `docs/implementation/methodology.md` §4.7. This reshapes the sizing problem (see sizing reevaluation doc).
-
-**Elder-template track:** Paused as of 2026-04-14 — LLM inner loop falsified, walk-forward killed all top configs. See `docs/rd/elder-track-pivot.md`.
+For the project's full constraint set, axioms, philosophy, operational
+limits, and risk tolerance, see [`docs/charter/`](docs/charter/).
 
 ---
 
-## Repository Layout
+## Where to look
+
+The documentation is structured into five categories with the same
+discipline as the codebase:
+
+| Question | Where to look |
+|---|---|
+| What is this project, and what may it not do? | [`docs/charter/`](docs/charter/) |
+| What's running right now, and what's coming next? | [`docs/rd/pipeline.md`](docs/rd/pipeline.md) |
+| How does the paper-trade daemon work? | [`docs/platform/paper-trade-daemon.md`](docs/platform/paper-trade-daemon.md) |
+| What does "calibration curve" mean? | [`docs/components/calibration-curves.md`](docs/components/calibration-curves.md) |
+| What's our testing rigor? | [`docs/reference/methodology.md`](docs/reference/methodology.md) |
+| What does "ideation → live" mean precisely? | [`docs/reference/stages-and-verdicts.md`](docs/reference/stages-and-verdicts.md) |
+| When/how do we do strategic re-evaluation? | [`docs/reference/fresh-eyes-playbook.md`](docs/reference/fresh-eyes-playbook.md) |
+| What's HIP-4, what's Polymarket doing? | [`docs/reference/external-landscape.md`](docs/reference/external-landscape.md) |
+| How do I run X? | [`docs/reference/runbook.md`](docs/reference/runbook.md) |
+
+The full taxonomy is in [`docs/README.md`](docs/README.md).
+
+---
+
+## Current status (one-screen view)
+
+For the live status table across all candidates, see
+[`docs/rd/pipeline.md`](docs/rd/pipeline.md). Snapshot:
+
+- **Active:** PM Underwriting · Lottery (paper, since 2026-04-20),
+  PM Underwriting · Insurance (paper, since 2026-04-25)
+- **Terminal:** Elder templates (rejected non-viable),
+  #4 narrative spread (rejected needs-iteration),
+  #10 vol surface (absorbed into PM Phase 5 hedging)
+- **Ideation queue:** 10 candidates, see pipeline.md
+
+---
+
+## Repository layout
 
 ```
 prospector/
-├── AGENTS.md                  <- you are here
+├── AGENTS.md                         <- you are here
 ├── pyproject.toml
-├── src/
-│   └── prospector/
-│       ├── data/              <- Hyperliquid API client, OHLCV download, orderbook poller
-│       ├── templates/         <- Elder-track strategy templates (triple_screen, false_breakout)
-│       ├── harness/           <- Backtest engine and walk-forward validation
-│       ├── ledger.py          <- SQLite append-only log for orchestrator
-│       └── orchestrator.py    <- LLM-driven inner loop (Elder track, paused)
+├── src/prospector/
+│   ├── kalshi/                       <- REST client, RSA-PSS auth
+│   ├── data/                         <- Hyperliquid + Coinbase + ingest
+│   ├── strategies/pm_underwriting/   <- PM book code
+│   ├── dashboard.py                  <- streamlit dashboard
+│   ├── manifest.py                   <- strategy manifest loader
+│   └── ledger.py, orchestrator.py    <- legacy Elder-track scaffolding
 ├── scripts/
-│   ├── build_calibration_curve.py     <- Phase 1: PIT calibration from Kalshi data
-│   ├── walk_forward_backtest.py       <- Phase 2: train/test walk-forward simulation
-│   ├── capital_constrained_sim.py     <- Phase 2b: realistic portfolio with capital constraints
-│   ├── return_distribution.py         <- Phase 3.5: per-trade μ/σ by stratum; sample-size requirements
-│   ├── paper_trade.py                 <- Phase 3: live paper-trading daemon (launchd)
-│   ├── refresh_calibration_store.py   <- Phase 3: rebuild persisted calibration snapshot
-│   └── walk_forward_top_configs.py    <- Elder track: validate top ledger configs
+│   ├── paper_trade.py                <- the runner; both books invoke this
+│   ├── compute_clv.py                <- closing-line-value scoring
+│   ├── backfill_kalshi.py            <- historical pull
+│   ├── pull_kalshi_incremental.py    <- daily cron entry point
+│   ├── refresh_calibration_store.py  <- rebuild calibration snapshot
+│   ├── compute_sigma_table.py        <- rebuild σ-table
+│   ├── dashboard.py                  <- streamlit entry
+│   └── launchd/                      <- plists for the daemons
 ├── tests/
-├── data/
-│   ├── kalshi_hf/             <- HuggingFace dataset (5.3 GB parquet, gitignored)
-│   ├── calibration/           <- Script outputs (plots, gitignored)
-│   ├── ohlcv/                 <- Hyperliquid OHLCV parquet
-│   └── orderbook/             <- Hyperliquid L2 snapshots
-├── logs/
+├── data/                             <- gitignored
+│   ├── kalshi/{markets,trades}/      <- unified parquet tree
+│   ├── hyperliquid/, coinbase/, ohlcv/
+│   ├── calibration/                  <- store + σ-table
+│   └── paper/<book>/                 <- per-book portfolio DB + logs
 └── docs/
-    ├── rd/                    <- Research & Development
-    │   ├── deep-dive-prediction-market-underwriting.md  <- PM strategy prospectus
-    │   ├── deep-dive-kalshi-crypto-narrative-spread.md  <- Future strategy candidate
-    │   ├── literature-review.md
-    │   ├── strategy-families.md         <- Strategy queue
-    │   ├── sibling-project-insights.md
-    │   ├── elder-track-pivot.md         <- Why Elder track was paused
-    │   ├── elder-track-walk-forward.md  <- Elder walk-forward validation results
-    │   └── sizing-reevaluation.md       <- Phase 3.5: Kelly-per-bet → CI-based book-level sizing
-    ├── implementation/
-    │   ├── plan.md                      <- PM underwriting phases and progress
-    │   └── archived/                    <- Elder track specs (paused)
-    └── reference/
-        ├── terminology.md               <- Glossary of trading concepts
-        └── runbook.md                   <- How to run scripts and services
+    ├── README.md                     <- entry point + taxonomy
+    ├── charter/                      <- the brief; rarely changes
+    ├── platform/                     <- infrastructure
+    ├── components/                   <- reusable mechanisms
+    ├── rd/                           <- candidate pipeline
+    │   ├── pipeline.md               <- cross-strategy status
+    │   └── candidates/               <- one file per candidate
+    ├── reference/                    <- methodology, glossary, runbook,
+    │   │                                playbooks, external landscape
+    │   └── fresh-eyes-reviews/       <- dated review archive
+    └── implementation/archived/      <- legacy Elder-track design specs
 ```
 
 ---
 
-## Environment and Tooling
+## Environment and tooling
 
 ```bash
-# Activate the project virtual environment
 source /Users/wgilman/workspace/prospector/.venv/bin/activate
 
-# Run tests
-PYTHONPATH=src pytest -q tests
+PYTHONPATH=src pytest -q tests          # tests
+ruff check src tests scripts             # lint
 
-# Run linter
-ruff check src tests scripts
-
-# PM Underwriting scripts
-python scripts/build_calibration_curve.py      # Phase 1: calibration curve
-python scripts/walk_forward_backtest.py        # Phase 2: walk-forward backtest
-python scripts/capital_constrained_sim.py      # Phase 2b: capital-constrained sim
+# Per-task scripts — full reference at docs/reference/runbook.md
+python scripts/paper_trade.py --once
+python scripts/compute_clv.py
+streamlit run scripts/dashboard.py
 ```
 
-See `docs/reference/runbook.md` for full operational details.
+See [`docs/reference/runbook.md`](docs/reference/runbook.md) for the full
+operational guide.
 
 ---
 
-## Key Sibling Projects
+## How to add a new candidate
 
-| Project | Relationship |
-|---|---|
-| `kalshi-autoagent` | 5 structural arb strategies on Kalshi (mathematical violations). PM underwriting complements: statistical violations. |
-| `kalshi-arb-trader` | Execution infrastructure for Kalshi. Likely reusable for Phase 3 API client. |
-| `crypto-copy-bot` | Hyperliquid copy trading + funding arb. Separate from Kalshi work. |
-| `options-autoagent` | Options constraint violation detection. |
+1. Pick the next available ID from [`docs/rd/pipeline.md`](docs/rd/pipeline.md).
+2. Copy the template from [`docs/rd/README.md`](docs/rd/README.md).
+3. Create `docs/rd/candidates/NN-name.md`.
+4. Fill in the **Status snapshot** + **Ideation** sections.
+5. Add a row to `docs/rd/pipeline.md`.
+6. Add the first decision-log entry.
+
+Stage transitions follow [`docs/reference/stages-and-verdicts.md`](docs/reference/stages-and-verdicts.md).
 
 ---
 
-## Docs Reference
+## Sibling projects (don't duplicate)
 
-| Directory | Purpose |
-|---|---|
-| `docs/rd/` | Research deep dives, literature review, strategy candidates, experiment post-mortems |
-| `docs/implementation/` | Current build plan, phase status, validation methodology, archived Elder track specs |
-| `docs/reference/` | Terminology glossary, operational runbook |
+The user's friend operates `kalshi-autoagent`, `kalshi-arb-trader`,
+`crypto-copy-bot`, `options-autoagent` under
+`~/workspace/other-trading-projects/`. Lessons we've imported and what's
+already covered there is in
+[`docs/reference/sibling-projects.md`](docs/reference/sibling-projects.md).

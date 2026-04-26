@@ -72,8 +72,11 @@ For the live status table across all candidates, see
 [`docs/rd/pipeline.md`](docs/rd/pipeline.md). Snapshot:
 
 - **Active:** PM Underwriting · Lottery (paper, since 2026-04-20),
-  PM Underwriting · Insurance (paper, since 2026-04-25)
-- **Terminal:** Elder templates (rejected non-viable),
+  PM Underwriting · Insurance (paper, since 2026-04-25),
+  Elder templates + Bayesian optimization (backtest, since 2026-04-25 —
+  reformulation of candidate 00)
+- **Terminal:** Elder templates · LLM optimizer (rejected needs-iteration —
+  reformulated as #15),
   #4 narrative spread (rejected needs-iteration),
   #10 vol surface (absorbed into PM Phase 5 hedging)
 - **Ideation queue:** 10 candidates, see pipeline.md

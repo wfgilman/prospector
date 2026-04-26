@@ -1,20 +1,23 @@
 ---
 id: 00
-name: Elder templates parameter search
+name: Elder templates parameter search (LLM optimizer)
 status: rejected
-verdict: non-viable
-last-update: 2026-04-14
+verdict: needs-iteration
+last-update: 2026-04-25
 related-components: []
+reformulated-as: 15
 ---
 
-# Candidate 00: Elder Templates Parameter Search
+# Candidate 00: Elder Templates Parameter Search (LLM Optimizer)
 
 ## Status snapshot
 
 - **Stage:** rejected
-- **Verdict:** non-viable
-- **Reason:** LLM inner-loop is structurally mis-fit for continuous-parameter search; trade density in Elder templates is structurally insufficient for walk-forward validation. No variant, overlay, or scale change rescues this.
-- **Next move:** None. Closed.
+- **Verdict:** **needs-iteration** (revised 2026-04-25 from `non-viable`)
+- **Reason for revision:** The 2026-04-24 fresh-eyes review surfaced that two of the three original rejection criteria — "LLM doesn't fit continuous optimization" and "directional, not structural-arb" — were self-imposed framework constraints, not empirical findings about Elder templates themselves. Codified into [`charter/axioms.md`](../../charter/axioms.md) §5 (LLM is for categorical reasoning) and §7 (directional with measured edge is fine at small scale).
+- **Reformulated as:** [`15-elder-templates-bayesian.md`](15-elder-templates-bayesian.md). Same templates, same parameter space, same harness — but with a **Bayesian optimizer** in place of the LLM. Tests whether the parameter space contains stable edge using the right tool for the job.
+- **What this candidate tested empirically:** that LLM-as-optimizer doesn't beat random search at continuous-parameter optimization. That finding stands and is codified in [`charter/axioms.md`](../../charter/axioms.md) §5. This candidate's specific rejection should not be confused with a verdict on the Elder templates themselves.
+- **Next move:** None for this candidate (the LLM-optimizer formulation stays rejected). See [`15`](15-elder-templates-bayesian.md) for the reopened test.
 
 ## Ideation
 
@@ -94,9 +97,11 @@ Not reached.
 |---|---|---|
 | Early Apr 2026 | Track launched | Two-loop architecture proven in siblings |
 | 2026-04-14 | Track paused | LLM inner loop falsified for continuous parameter search; walk-forward killed all top configs |
-| 2026-04-14 | Verdict: non-viable | The failure modes are structural (problem-shape mismatch + trade-sparsity), not tactical. No variant of the same approach rescues it: continuous optimization remains continuous, trade density is bounded by the templates themselves, and the book author treats the templates as arbitrary anyway (the value is in consistent application + risk management, not template choice). |
+| 2026-04-14 | Verdict: non-viable | (At the time:) The failure modes are structural (problem-shape mismatch + trade-sparsity), not tactical. *Revised 2026-04-25 — see below.* |
 | 2026-04-14 | Pivot to research mode | Sibling projects exploit categorical structures; this project shifted to strategies where LLM categorical reasoning earns its keep |
 | 2026-04-25 | Codified into [`charter/axioms.md`](../../charter/axioms.md) §5 as the LLM-comparative-advantage axiom | Generalizes the lesson |
+| **2026-04-25** | **Verdict revised: non-viable → needs-iteration** | Fresh-eyes review (now archived at [`reference/fresh-eyes-reviews/2026-04-24.md`](../../reference/fresh-eyes-reviews/2026-04-24.md)) surfaced that the "directional, not structural-arb" rejection criterion was a desk-style constraint inconsistent with the project's actual axiom set (PM Underwriting Lottery is also directional and works). The "LLM doesn't fit" criterion was an LLM-as-optimizer issue, not an Elder-templates issue. The third criterion (trade sparsity) is real but worth testing under a competent optimizer before declaring `non-viable`. |
+| **2026-04-25** | **Reformulated as candidate [`15`](15-elder-templates-bayesian.md)** | Same templates, same parameter space, same harness — Bayesian optimizer in place of the LLM. Per the framework: stage transitions don't regress; reformulations open a new candidate file. |
 
 ## Cause-of-death summary
 

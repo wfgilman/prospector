@@ -11,12 +11,13 @@ For stage definitions and verdict criteria, see
 |---|---|---|---|---|---|
 | 01 | [PM Underwriting · Lottery](candidates/01-pm-underwriting-lottery.md) | paper-portfolio | pending | 2026-04-25 | Continue paper accrual; CLV delta check ~Monday |
 | 04 | [PM Underwriting · Insurance](candidates/04-pm-underwriting-insurance.md) | paper-portfolio | pending | 2026-04-25 | Daemon loaded; first tick ~07:55 PT 2026-04-25; assess after 30 days |
+| 15 | [Elder templates + Bayesian optimization](candidates/15-elder-templates-bayesian.md) | backtest | pending | 2026-04-25 | Implement `scripts/elder_bayesian_search.py` (skopt GP + EI); run pre-registered Bayesian-vs-random comparison + walk-forward |
 
 ## Terminal — kept for reference
 
 | ID | Candidate | Stage | Verdict | Last update | Reason |
 |---|---|---|---|---|---|
-| 00 | [Elder templates parameter search](candidates/00-elder-templates.md) | rejected | non-viable | 2026-04-14 | LLM inner loop falsified for continuous parameter search; trade density structurally insufficient |
+| 00 | [Elder templates (LLM optimizer)](candidates/00-elder-templates.md) | rejected | needs-iteration | 2026-04-25 | LLM-as-optimizer falsified (real). "Directional" critique and trade-sparsity were treated as structural; fresh-eyes review revised first two as self-imposed framework errors. Reformulated as [`15`](candidates/15-elder-templates-bayesian.md) with Bayesian optimizer. |
 | 02 | [Kalshi × crypto narrative spread](candidates/02-kalshi-crypto-narrative-spread.md) | rejected | needs-iteration | 2026-04-23 | Sign correct on 15-min Coinbase data; magnitude near zero. Operational triage: cadence + throughput fail. Revisit if infra envelope opens or 2+ years more events accumulate. |
 | 03 | [Kalshi × Hyperliquid vol surface](candidates/03-kalshi-hyperliquid-vol-surface.md) | absorbed | viable | 2026-04-23 | Convergence thesis dead, D1 longshot wedge replicated. Folded into PM Phase 5 hedging overlay scope. |
 

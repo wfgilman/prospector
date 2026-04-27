@@ -33,10 +33,12 @@ the invocation as a context switch.
 
 ---
 
-## The four-axiom lens
+## The axiom lens
 
 Every fresh-eyes review re-examines the project through the
-[charter axioms](../charter/axioms.md):
+[charter axioms](../charter/axioms.md). The four originating axioms
+shape the strategic questions; axiom 8 (literature review) shapes the
+discipline applied to any new candidate the review surfaces:
 
 1. **Novelty from new combinations of existing ideas.** What recent
    external developments suggest new combinations? Are we currently
@@ -50,6 +52,11 @@ Every fresh-eyes review re-examines the project through the
 4. **Fresh eyes reveal what familiarity hides.** What self-imposed
    constraints have crept in? What outsider-obvious questions have we
    stopped asking because we've internalized the assumptions?
+5. **Know what's already been done** (axiom 8). For any new candidate the
+   review proposes, name the prior art — TradFi analogue, academic
+   paper, sibling-project work — before logging it. A review that
+   surfaces 5 candidates without prior-art anchoring is generating
+   speculation, not insight.
 
 ---
 
@@ -114,7 +121,7 @@ review:
 
 Drift is normal; the playbook is what catches it.
 
-### Step 6 — Apply the four axioms
+### Step 6 — Apply the axioms
 
 For each axiom, ask the specific question:
 
@@ -124,6 +131,7 @@ For each axiom, ask the specific question:
 | Small-player | What 40-200 events/year strategy are we filtering out because it fails the desk-style throughput filter? |
 | Different scale | What recently-rejected candidate could be rescued by a cadence/scale/scope change? |
 | Fresh eyes | What self-imposed constraint has crept in that an outsider would question? |
+| Prior art (axiom 8) | For any new candidate this review proposes — has it been done before, where, and what was the finding? |
 
 These questions are not rhetorical — write down the answers.
 

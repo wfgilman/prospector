@@ -8,6 +8,14 @@
 This is a reading-list reference, not a strategy queue. Strategies that
 emerged from this survey live in [`../rd/candidates/`](../rd/candidates/).
 
+This file is the primary anchor for [axiom 8 — *know what's already been
+done*](../charter/axioms.md#8-know-whats-already-been-done). Every new
+candidate's **Ideation → Prior art / existing applications** subsection
+should cross-reference an entry here (or to
+[`sibling-projects.md`](sibling-projects.md), or to a documented
+external development). When a real search turns up new prior art that
+isn't catalogued below, add a row.
+
 ---
 
 ## 1. Funding Rate Arbitrage (crypto perpetual futures)
@@ -248,3 +256,4 @@ weather convergence candidate](../rd/candidates/09-kalshi-cme-weather-convergenc
 | 2026-04-15 | Initial literature survey | Inform strategy-family selection |
 | 2026-04-25 | Doc moved from `rd/literature-review.md` to `reference/literature-survey.md` | Reorg: this is reference / reading list, not active R&D. Strategy candidates derived from this list now live in [`../rd/candidates/`](../rd/candidates/) |
 | 2026-04-25 | Added Charnov MVT, Hausch-Ziemba parimutuel, Cboe dispersion, Bae weather VRP rows | Surfaced in fresh-eyes review; complete the cross-domain reading list |
+| 2026-04-25 | Designated as primary anchor for axiom 8 (literature review) | New axiom added to charter; this file is what candidates' prior-art subsections should cross-reference |

@@ -159,6 +159,51 @@ edge mechanism is what matters, not the framing.
 
 ---
 
+## 8. Know what's already been done
+
+Every strategy ideation starts with a literature review. Before logging a
+candidate, find how the concept has been applied before — in another
+discipline, in TradFi, in academic research, in sibling projects, in
+existing open-source implementations. This is the same discipline an
+academic paper applies before claiming a contribution: situate the work in
+what's known so you can articulate precisely how it's new, incremental,
+different, or just borrowed.
+
+The point isn't gatekeeping; it's leverage. People have been thinking
+about variants of these problems for decades. Reading their work is the
+single highest-ROI use of an hour at the start of a candidate. It:
+
+- Surfaces vocabulary that lets you search more effectively
+- Reveals known pitfalls (so we don't rediscover them at 11pm in a paper book)
+- Identifies the specific assumption or scale that makes our application different
+- Sometimes kills the candidate cheaply when prior art shows it doesn't work
+- Sometimes strengthens the candidate by showing the mechanism is well-validated and the only open question is the application
+
+The project's [`literature-survey.md`](../reference/literature-survey.md)
+is the running reading list. Every strategy in the active and queued
+pipeline should be traceable to one or more entries there (or to a
+sibling-project lesson, or to a documented external development).
+
+**How to apply:** When a new candidate is logged, the **Ideation** section
+must include a *"Prior art / existing applications"* subsection answering:
+
+1. Where has this concept (or a close analogue) been applied before?
+2. What did those applications find — works, doesn't work, conditional?
+3. What's specifically different about our application — scale, cadence,
+   substrate, combination, formulation?
+4. If nothing turns up after a real search, say so explicitly. "I looked
+   and found nothing" is a valid answer; "I didn't look" is not.
+
+If the candidate is reformulating or borrowing from a sibling project,
+cite [`sibling-projects.md`](../reference/sibling-projects.md). If from
+academic literature, add the entry to `literature-survey.md` if it isn't
+there, and link the candidate to it.
+
+The bar is not exhaustive — it's *honest engagement with prior work*.
+Two hours of focused search beats two days of reinvention.
+
+---
+
 ## Decision log
 
 | Date | Decision | Rationale |
@@ -168,3 +213,4 @@ edge mechanism is what matters, not the framing.
 | 2026-04-22 | Axiom 6 (methodology discipline) explicit | Adopted formally for #10 vol surface pre-registration |
 | 2026-04-25 | Axiom 7 (directional is fine at small scale) explicit | Reframed during fresh-eyes review; PM book is directional and that's OK |
 | 2026-04-25 | Axioms consolidated into charter | Previously implicit in deep-dives + AGENTS.md; centralized for discoverability |
+| 2026-04-25 | Axiom 8 (know what's already been done) added | User-stated after reading the reorganized framework: every ideation should start with literature review against another-discipline / TradFi / sibling-project prior art, the same way an academic paper situates itself in known work. Codifies discipline already in use (the existing `literature-survey.md` exists) but had no ideation-level enforcement. |

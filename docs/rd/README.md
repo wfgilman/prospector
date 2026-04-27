@@ -55,6 +55,16 @@ related-components: [equal-sigma-sizing, calibration-curves, ...]
 ## Ideation
 Origin, axiomatic fit, expected edge mechanism, why-now.
 
+### Prior art / existing applications
+Required (per [axiom 8](../charter/axioms.md#8-know-whats-already-been-done)):
+- Where has this concept (or a close analogue) been applied before?
+  Cross-reference [`../reference/literature-survey.md`](../reference/literature-survey.md)
+  and/or [`../reference/sibling-projects.md`](../reference/sibling-projects.md).
+- What did those applications find?
+- What's specifically different about our application — scale, cadence,
+  substrate, combination, formulation?
+- If a real search turned up nothing, say so explicitly.
+
 ## Deep dive
 (Empty until promoted from ideation.)
 

@@ -32,6 +32,7 @@ from prospector.manifest import StrategyEntry
 # up substrings of exception tracebacks.
 _TICK_RE = re.compile(
     r"^entered=(?P<entered>\d+) rejected=(?P<rejected>\d+) "
+    r"(?:shadow=(?P<shadow>\d+) )?"
     r"candidates=(?P<candidates>\d+) "
     r"resolved=(?P<resolved>\d+) voided=(?P<voided>\d+)\s*$"
 )
@@ -43,6 +44,7 @@ class TickSummary:
     timestamp: datetime | None
     entered: int
     rejected: int
+    shadow: int
     candidates: int
     resolved: int
     voided: int
@@ -68,11 +70,13 @@ def load_tick_history(log_dir: Path, limit: int = 50) -> list[TickSummary]:
                 continue
             tick_match = _TICK_RE.match(line)
             if tick_match:
+                shadow_raw = tick_match["shadow"]
                 ticks.append(
                     TickSummary(
                         timestamp=prev_ts,
                         entered=int(tick_match["entered"]),
                         rejected=int(tick_match["rejected"]),
+                        shadow=int(shadow_raw) if shadow_raw is not None else 0,
                         candidates=int(tick_match["candidates"]),
                         resolved=int(tick_match["resolved"]),
                         voided=int(tick_match["voided"]),
@@ -1044,6 +1048,7 @@ def _render_tick_stream(log_dir: Path) -> None:
                 "candidates": t.candidates,
                 "entered": t.entered,
                 "rejected": t.rejected,
+                "shadow": t.shadow,
                 "resolved": t.resolved,
                 "voided": t.voided,
             }

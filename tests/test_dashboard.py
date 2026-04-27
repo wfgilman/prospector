@@ -115,9 +115,25 @@ def test_load_tick_history_parses_summary_and_timestamp(tmp_path: Path) -> None:
     assert len(ticks) == 2
     assert ticks[-1].entered == 2
     assert ticks[-1].rejected == 3
+    assert ticks[-1].shadow == 0
     assert ticks[-1].candidates == 7
     assert ticks[-1].resolved == 1
     assert ticks[-1].timestamp == datetime(2026, 4, 21, 14, 25, 45, tzinfo=timezone.utc)
+
+
+def test_load_tick_history_parses_shadow_field(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "paper_trade-20260427.log").write_text(
+        "2026-04-27 14:10:42,972 INFO prospector.runner tick start\n"
+        "entered=10 rejected=38 shadow=13 candidates=71 resolved=0 voided=0\n"
+    )
+    ticks = load_tick_history(log_dir)
+    assert len(ticks) == 1
+    assert ticks[0].entered == 10
+    assert ticks[0].rejected == 38
+    assert ticks[0].shadow == 13
+    assert ticks[0].candidates == 71
 
 
 def test_load_tick_history_empty_dir(tmp_path: Path) -> None:

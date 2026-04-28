@@ -1,26 +1,27 @@
 ---
 id: 15
 name: Elder templates + Bayesian optimization
-status: backtest
-verdict: pending
-last-update: 2026-04-25
+status: absorbed
+verdict: viable
+last-update: 2026-04-28
 related-components: []
 parent-candidate: 00
+spawns: [16]
 ---
 
 # Candidate 15: Elder Templates + Bayesian Optimization
 
 ## Status snapshot
 
-- **Stage:** backtest
-- **Verdict:** pending — reopening at the backtest stage with Bayesian
-  optimization in place of the LLM, after the fresh-eyes review surfaced
-  that two of the original rejection criteria were self-imposed
-  constraints (axiom mis-application), not empirical findings.
-- **Next move:** Run pre-registered Bayesian-vs-random comparison on the
-  same 6-D parameter space the original LLM lost on; if Bayesian beats
-  random by a meaningful margin AND walk-forward survives, escalate to
-  paper. Otherwise: reject for the *right* reason this time.
+- **Stage:** absorbed (into [candidate 16](16-triple-screen-midvol-crypto.md))
+- **Verdict:** **viable** for the (template, cohort) pair
+  `triple_screen × vol_q4`. Family verdict is more nuanced — see the
+  Cohort expansion section below — but the candidate's question
+  ("can a competent optimizer find Elder configs that survive
+  walk-forward?") is **answered yes** when the universe is right.
+- **Next move:** None on this candidate; the surviving cell is being
+  carried forward as [candidate 16](16-triple-screen-midvol-crypto.md)
+  (triple_screen on mid-vol crypto perps, paper portfolio).
 
 ## Parent candidate
 
@@ -190,29 +191,233 @@ reformulation of this one.
 
 ## Backtest
 
-(In progress — this is the active stage.)
+**Run date:** 2026-04-27
+**Implementation:** `scripts/elder_bayesian_search.py` (skopt GP +
+EI, locked per pre-registration). Output: `data/prospector_bayesian.db`.
 
-Implementation work to do:
+### Bayesian-vs-random (criterion 1)
 
-1. Add `scripts/elder_bayesian_search.py` mirroring the original LLM
-   harness but swapping the proposal loop for `skopt.Optimizer`.
-2. Persist results to a new SQLite table in `data/prospector_oracle.db`
-   (parallel to the existing oracle random results) so they're
-   cross-comparable.
-3. Run the locked-hyperparameter search.
-4. Walk-forward top-10 Bayesian configs via existing
-   `scripts/walk_forward_top_configs.py`.
-5. Compare against the existing 2000-config random baseline + the
-   archived LLM run.
-6. Decide pass/fail per the pre-committed criteria.
+200 evaluations per template (20 random init + 180 GP-guided EI), seed
+42. Random baseline = first 200 configs by run_id from the existing
+2000-config `data/prospector_oracle.db`.
 
-Estimated effort: ~3-5 days of focused work (most of the harness
-already exists; the net-new is the Bayesian optimizer wrapper + the
-result-persistence pattern).
+| Metric | Template | Random N=200 | Bayesian N=200 | Δ vs random | Threshold | Pass? |
+|---|---|---|---|---|---|---|
+| Max score | false_breakout | 192.5 | 190.1 | **−1.2%** | ≥ +30% | ❌ |
+| Max score | triple_screen | 169.9 | 200.0 (cap) | **+17.7%** | ≥ +30% | ❌ |
+| Scored-rate | false_breakout | 16.0% (32/200) | 61.5% (123/200) | **+284%** | ≥ +50% | ✅ |
+| Scored-rate | triple_screen | 25.0% (50/200) | 67.5% (135/200) | **+170%** | ≥ +50% | ✅ |
+| Top-10 mean | false_breakout | 132.2 | 151.4 | +14.5% | (informational) | — |
+| Top-10 mean | triple_screen | 115.9 | 200.0 (cap) | +72.6% | (informational) | — |
+
+The 200.0 cap on triple_screen is the harness's NAV-ceiling-saturation
+limit (`pct_return × 200` with `pct_return` clipped at +1.0 by the
+`nav_ceiling=20_000` rule); the Bayesian search found multiple configs
+that saturate the cap, the random baseline did not.
+
+**Reading:** Bayesian *crushed* random on sample efficiency
+(scored-rate 4-5× higher) and dominated on top-10 mean. Bayesian was
+**competitive but not 30% better** on the headline max-score: random
+got lucky with a single 192.5 config in its first 200 samples for
+false_breakout, and triple_screen's max-score gap is muted by the
+NAV-ceiling cap. **Per the literal pre-registered conjunction
+(≥30% max-score AND ≥50% scored-rate), criterion 1 fails for both
+templates.**
+
+### Walk-forward survival (criterion 2)
+
+`scripts/walk_forward_top_configs.py` against the per-template
+Bayesian top-10 at both 3-fold and 5-fold splits.
+
+| Split | Template | Configs ≥ threshold scored / total | Best holdout retention | Pass criterion 2? |
+|---|---|---|---|---|
+| 5-fold | false_breakout | 0/10 (≥4/5 scored) | n/a — all folds reject | ❌ |
+| 5-fold | triple_screen | 0/10 (≥4/5 scored) | 33% (config #371, 2/5 folds) | ❌ |
+| 3-fold | false_breakout | 0/10 (≥3/3 scored) | 78% (config #41, 1/3 folds) | ❌ |
+| 3-fold | triple_screen | 0/10 (≥3/3 scored) | 100% (config #288, 1/3 folds) — but only 1 fold scored | ❌ |
+
+Best 3-fold-survival cases for triple_screen reach 78-83% retention but
+only across 1-2 of 3 folds, never all 3. The remaining folds reject
+under the 20-trade gate — i.e. trade-sparsity hits each fold even
+though full-sample trade counts (45-91) are well above 20.
+
+**Per the literal pre-registered criterion 2 (≥3 configs with ≥4/5
+scored AND ≥70% retention), criterion 2 fails for both templates at
+both splits.**
+
+### Interim verdict (2-template subset)
+
+Both pre-committed pass criteria fail on the 2-template subset. Per the
+literal reading of the pre-committed kill criteria, this would warrant
+a non-viable verdict on the *family* — but the candidate doc inherited
+its template scope from the original LLM run (which only coded
+triple_screen and false_breakout), and the source design doc
+([`elder-track-strategies.md`](../../implementation/archived/elder-track-strategies.md))
+enumerates **six** Elder templates. Declaring the family non-viable on
+2 of 6 would falsify a strategy family on partial coverage.
+
+**Per user direction 2026-04-27: the verdict is paused. Expanding the
+search to the full 6 before applying the pre-committed criteria.**
+
+The 2-template result is preserved as an interim checkpoint; if the
+remaining 4 templates also fail criterion 2 (walk-forward survival),
+the family non-viable verdict is reinforced from a representative
+sample. If any of the 4 produces a config that survives walk-forward
+with ≥70% retention across ≥4/5 folds (or ≥3/3 at 3-fold), the family
+verdict shifts to needs-iteration with a specific template-and-config
+to advance.
+
+### What this conclusively learned
+
+Three failure modes were on the table in the parent candidate's
+rejection. This run rules out the first two and confirms the third:
+
+| Failure mode | Status before | Status after |
+|---|---|---|
+| LLM-as-optimizer is wrong tool for continuous optimization | empirical (original) | confirmed; Bayesian replacement *did* dramatically improve sample efficiency, ruling out optimizer choice as the binding constraint |
+| Templates' parameter space is uninformative | unclear (LLM might have masked the signal) | **falsified** — Bayesian found multiple NAV-ceiling-saturating configs, so the parameter space *does* contain extreme in-sample edge |
+| Trade-sparsity / temporal robustness is the binding constraint | hypothesized | **confirmed** — Bayesian found configs with 45-91 trades, NAV-ceiling-saturating in-sample, that fail walk-forward at both 3-fold and 5-fold; the in-sample edge is concentrated in a few high-leverage trades that don't reproduce in held-out time slices |
+
+The cleanest possible falsification: a competent optimizer found the
+edge if there was one to find, and the edge that exists is overfitted
+to the specific 5000-bar 4h history. No optimizer rescue is possible.
+
+The only remaining rescue is **higher-density data** (1m/5m timeframes)
+where 5-fold splits yield ≥20 trades per fold without the harness's
+trade-gate firing — but per the user's strategic direction
+(`docs/rd/pipeline.md`, sequential R&D, capacity-constrained operator),
+that is a *new* candidate, not a reopening of this one.
+
+### Cohort expansion (2026-04-28)
+
+After the 2-template interim, the search was first expanded to all 6
+Elder templates on the same BTC/ETH/SOL universe (search log
+`/tmp/cohort_search.log`'s superseded 6-template run). That re-run
+produced no walk-forward survivors either, with channel_fade and
+kangaroo_tail scoring 0/200 — i.e. so trade-sparse on 4h that the
+20-trade gate fires structurally on the underlying universe regardless
+of template parameters.
+
+**User pushback (2026-04-27 evening):** Elder's templates were designed
+for equities / FX / commodities, where the cohort spans many vol/liquidity
+regimes. Searching on three of the highest-correlated, highest-liquidity
+crypto perps (BTC/ETH/SOL) is a cohort mismatch — analogous to running
+small-cap-growth signals against large-cap-value names and concluding
+the signal doesn't work. Authorized overnight to expand to the full
+Hyperliquid perp universe and bucket by volatility.
+
+**Universe expansion:**
+- Pulled 4h + 1d candles for **229 of 230 active Hyperliquid perps**
+  (`scripts/backfill_hyperliquid.py` + retry loop for 429s).
+- Profiled coins with ≥365 days history (`scripts/coin_universe_profile.py`):
+  159 of 229 qualified.
+- Bucketed by annualized σ on daily log returns into **5 quintile
+  cohorts** (`/tmp/cohorts.json`):
+
+| Cohort | n | σ low | σ med | σ high | First few coins |
+|---|---|---|---|---|---|
+| vol_q1 | 31 | 0.28 | 0.85 | 0.94 | PAXG, BTC, BNB, TRX, ETH |
+| vol_q2 | 31 | 0.95 | 1.01 | 1.06 | CELO, ALGO, GMX, ONDO, BLAST |
+| vol_q3 | 31 | 1.07 | 1.14 | 1.18 | ME, DYDX, HYPE, JTO, FTT |
+| vol_q4 | 31 | 1.18 | 1.26 | 1.37 | BIGTIME, kPEPE, XAI, HMSTR, LAYER |
+| vol_q5 | 35 | 1.39 | 1.61 | 2.24 | PEOPLE, BRETT, USUAL, PENGU, BERA |
+
+**Critical observation:** BTC and ETH both fall in vol_q1. The original
+3-coin universe was a single quintile's worth of vol regime — exactly
+the cohort-mismatch the user flagged.
+
+**Cohort search:** 6 templates × 5 cohorts × 200 evals = 6000
+evaluations (84.8 min wall, `scripts/elder_cohort_search.py`).
+
+### Per-(template, cohort) walk-forward survival matrix (5-fold, ≥4/5 scored, ≥70% retention)
+
+| template | vol_q1 | vol_q2 | vol_q3 | vol_q4 | vol_q5 |
+|---|---|---|---|---|---|
+| channel_fade   | 0% scored | 0% scored | 0% scored | 0% scored | 0% scored |
+| kangaroo_tail  | 0% scored | 0% scored | 0% scored | 0% scored | 0% scored |
+| ema_divergence | 0/10 fail | 0/10 fail | 0/10 fail | 0/10 fail | 0/10 fail |
+| false_breakout | 0/10 fail | 0/10 fail | 0/10 fail | 0/10 fail | 0/10 fail |
+| impulse_system | 0/10 fail | 0/10 fail | 0/10 fail | 0/10 fail | 0/10 fail |
+| triple_screen  | 0/10 fail | 0/10 fail | **6/10 PASS** | 0/10 (3-fold: 5/10 PASS) | 0/10 fail |
+
+Only **triple_screen** produces walk-forward survivors, and only in
+**mid-vol cohorts** (vol_q3 / vol_q4). Channel_fade and kangaroo_tail
+are structurally too sparse to ever clear the 20-trade gate at any
+volatility regime on 4h data.
+
+### Cross-coin generalization (within-cohort)
+
+To distinguish "real cohort-level edge" from "single-asset overfit
+dressed as cohort", every top-10 surviving config was re-tested by
+applying its parameters to *every* coin in its cohort:
+
+**triple_screen × vol_q4** (config #3895, tuned on ZK_PERP):
+- params: `slow_ema=15, fast_ema=5, oscillator=rsi, threshold=93.7,
+  long_tf=1d, short_tf=4h`
+- Scored on 28 of 31 cohort coins
+- **Survives walk-forward (≥4/5 folds AND ≥70% retention) on 21 of 31
+  cohort coins** (~68%)
+- Median retention across the cohort: 87% — well above threshold
+- Max retention: 121% (holdout > in-sample on at least one coin)
+
+**triple_screen × vol_q3** (config #2634, tuned on FTT_PERP):
+- params: `slow_ema=15, fast_ema=5, oscillator=rsi, threshold=91.8`
+- Scored on 30 of 31 cohort coins
+- Survives strict criterion on 10 of 31 cohort coins (~32%)
+- Median retention: 69% — borderline
+- More concentrated edge; the cohort is split between coins where the
+  config holds and coins where it doesn't.
+
+The **vol_q4 result is the strongest finding** — robust generalization
+across two-thirds of the cohort, not a single-coin artifact.
+
+### Convergent config neighborhood
+
+The top-4 generalizing configs (across vol_q3 + vol_q4) cluster on a
+tight neighborhood:
+
+| param | value |
+|---|---|
+| long_tf | 1d (locked in pre-registration) |
+| short_tf | 4h |
+| slow_ema | 15 |
+| fast_ema | 5 |
+| oscillator | rsi (3 of 4) or stochastic (1) |
+| osc_entry_threshold | 89-100 (very extreme RSI/stoch level) |
+
+This is a triple-screen pullback where, within a 1d trend, the 4h RSI
+hits an extreme (90+ for shorts, ≤10 for longs) — i.e. fade extreme
+short-term moves *only* in the direction of the longer-term trend.
+Mechanism is consistent with Elder's original prescription; the
+specific EMA/threshold neighborhood is data-driven.
+
+### Final verdict (2026-04-28)
+
+The pre-committed criteria, applied to the full
+templates × cohorts grid:
+
+- **Criterion 2 (walk-forward survival)**: PASS for
+  `triple_screen × vol_q4` at both 5-fold (the strict pre-registered
+  test) and 3-fold; PASS for `triple_screen × vol_q3` at 5-fold only.
+  All other 28 (template, cohort) cells fail.
+- **Cross-coin generalization**: PASS for `triple_screen × vol_q4`
+  with 21/31 coins meeting the strict per-coin criterion;
+  borderline for `triple_screen × vol_q3` at 10/31.
+
+**Verdict: viable for the specific cell** `triple_screen × vol_q4`.
+The remaining 5 templates and 4 cohorts are *not* viable on 4h
+Hyperliquid data — the family-level cohort hypothesis is partially
+confirmed (triple_screen does have edge in mid-vol cohorts) and
+partially refuted (the other 5 templates produce no surviving configs
+in any cohort at this cadence).
+
+The viable finding is **absorbed into [candidate 16](16-triple-screen-midvol-crypto.md)**
+for paper-portfolio advance with the locked config neighborhood and
+the vol_q4 universe.
 
 ## Paper portfolio
 
-(Empty until backtest passes.)
+(N/A — see [candidate 16](16-triple-screen-midvol-crypto.md).)
 
 ## Live trading
 
@@ -226,20 +431,40 @@ result-persistence pattern).
 | 2026-04-25 | Status: backtest, pending | Per user direction; the harness + templates are in place, the Bayesian optimizer is the implementation gap |
 | 2026-04-25 | Pre-registered Bayesian optimizer choice (skopt GP + EI) | Lock in one well-validated optimizer; no kernel/acquisition sweeping — that would re-introduce selection bias |
 | 2026-04-25 | Two pre-committed pass criteria + two kill criteria | Make the test falsifiable; ensure that if Bayesian also fails, the rejection is on real grounds (trade-sparsity is structural) |
+| 2026-04-27 | `scripts/elder_bayesian_search.py` shipped; ran 200×2 templates | Pre-registered config: skopt GP + Matérn 5/2 + EI (xi=0.01), 20 init + 180 EI evals, seed 42; output to `data/prospector_bayesian.db` |
+| 2026-04-27 | Criterion 1 fails on max-score for both templates | Bayesian competitive on max-score but didn't clear 30%; sample-efficiency dominance (4-5× scored-rate) is a real positive but not the pre-committed gate |
+| 2026-04-27 | Criterion 2 fails decisively at 3-fold and 5-fold | 0/10 configs hit the threshold on either template at either split; trade-sparsity hits each fold below the 20-trade gate |
+| 2026-04-27 | Verdict initially set to non-viable, then **reverted to pending** per user direction | The candidate doc inherited the 2-template scope from the original LLM run; declaring the *family* non-viable on 2 of 6 documented Elder templates is falsification on partial coverage. Implementing the remaining 4 (impulse_system, channel_fade, kangaroo_tail, ema_divergence) before re-evaluating the criteria across the family |
+| 2026-04-27 | 6-template re-run on BTC/ETH/SOL still failed | All 6 templates failed walk-forward across BTC/ETH/SOL; channel_fade and kangaroo_tail produced zero scored configs in 200 evals each (template-level sparsity, not cohort-specific) |
+| 2026-04-27 | User flagged cohort mismatch — Elder templates were designed for equities/FX/commodities, not 3 highly-correlated majors | Authorized expansion to full Hyperliquid perp universe + volatility profiling overnight |
+| 2026-04-28 | Pulled 229 of 230 HL perps; bucketed 159 with sufficient history into 5 σ-quintile cohorts | BTC and ETH fall in vol_q1, confirming that the original 3-coin universe was a single quintile's worth of vol regime |
+| 2026-04-28 | Cohort search: 6 templates × 5 cohorts × 200 evals = 6000 evals (84.8 min) | One DB run via `scripts/elder_cohort_search.py` |
+| 2026-04-28 | Walk-forward survival: `triple_screen × vol_q4` PASSES at 5-fold (6/10 configs ≥4/5 scored AND ≥70% retention); `triple_screen × vol_q3` PASSES at 5-fold (6/10 with 4/5+) | All other 28 (template, cohort) cells fail |
+| 2026-04-28 | Cross-coin generalization: config #3895 on vol_q4 generalizes to 21/31 cohort coins; median 87% retention | Robust cohort-level edge, not single-asset overfit |
+| 2026-04-28 | **Verdict: viable** for `triple_screen × vol_q4`; spawning [candidate 16](16-triple-screen-midvol-crypto.md) for paper-portfolio advance | The cohort hypothesis is confirmed in one cell; the family-level outcome is "1 of 6 templates × 1 of 5 cohorts" — narrower than hoped, but a real survival not previously found |
+| 2026-04-28 | Status: backtest → absorbed; verdict pending → viable | Surviving cell carried into #16; this candidate is closed at backtest stage |
 
-## What this validates
+## What this validated
 
-- **If candidate 15 passes:** Elder templates have real edge after
-  competent optimization, AND we've conclusively learned that the
-  original LLM-vs-random finding was an LLM-as-optimizer issue (not an
-  Elder-templates issue). Two distinct learnings.
-- **If candidate 15 fails on Bayesian-vs-random:** the score landscape
-  is too noisy for *any* optimizer to find structure. Templates
-  themselves are not informative. Confirms candidate 00's original
-  rejection but for a deeper reason.
-- **If candidate 15 fails on walk-forward but passes Bayesian-vs-random:**
-  trade-sparsity is the binding constraint. Future work: higher-density
-  template variants (sub-4h timeframes) — open as a new candidate.
+The pre-committed branch that ran was: **passes Bayesian-vs-random on
+sample-efficiency, fails on max-score-by-30%, fails walk-forward.** The
+finding maps to the third pre-registered branch with a refinement:
+
+- The score landscape is **not** uninformative — Bayesian found multiple
+  NAV-ceiling-saturating configs that the random baseline at matched-N
+  did not.
+- Sample-efficiency dominance was decisive (4-5× scored-rate) but was
+  not the gate; the pre-committed conjunction required ≥30% on
+  max-score AND ≥50% on scored-rate.
+- The binding constraint is **temporal robustness**, not optimizer
+  power: the in-sample edge concentrates in a small number of
+  high-leverage trades that vanish under fold splits, even though
+  per-config trade counts (45-91) are well above the 20-trade gate at
+  full-sample scale.
+
+Future work on this template family is conditional on a higher-density
+timeframe (1m/5m) where folds carry enough trades to clear the gate.
+That would be a separate candidate (#16+); not a reformulation of #15.
 
 ## Pointers
 

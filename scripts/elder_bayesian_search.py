@@ -55,7 +55,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 OHLCV_DIR = REPO_ROOT / "data" / "ohlcv"
 DEFAULT_DB = REPO_ROOT / "data" / "prospector_bayesian.db"
 
-SECURITIES = ["BTC-PERP", "ETH-PERP", "SOL-PERP"]
+DEFAULT_SECURITIES = ["BTC-PERP", "ETH-PERP", "SOL-PERP"]
 
 # Sentinel objective values for the optimizer. We minimize objective; smaller
 # is better. Scored runs use -score so best score → lowest objective.
@@ -67,74 +67,95 @@ OBJ_REJECTED = 10_000.0      # worse than catastrophic — config never even
 # ---------------------------------------------------------------------------
 # Pre-registered search spaces (LOCKED — do not change without a new candidate
 # id and decision-log entry; sweeping spaces re-introduces selection bias).
+#
+# `security` axis is parameterized at runtime via build_space() so per-cohort
+# universes can plug in different coin lists without duplicating the search
+# definitions. Everything else is locked.
 # ---------------------------------------------------------------------------
 
-FALSE_BREAKOUT_SPACE = [
-    Categorical(["1h", "4h", "1d"], name="timeframe"),
-    Integer(15, 60, name="range_lookback"),
-    Real(0.01, 0.10, name="range_threshold"),
-    Integer(1, 3, name="confirmation_bars"),
-    Categorical([False, True], name="volume_filter"),
-    Categorical(SECURITIES, name="security"),
-]
+def _false_breakout_axes() -> list:
+    return [
+        Categorical(["1h", "4h", "1d"], name="timeframe"),
+        Integer(15, 60, name="range_lookback"),
+        Real(0.01, 0.10, name="range_threshold"),
+        Integer(1, 3, name="confirmation_bars"),
+        Categorical([False, True], name="volume_filter"),
+    ]
+
 
 # Triple screen: long_tf locked at "1d" (dominant choice in oracle baseline)
 # to keep the space at 6-D. fast_ema < slow_ema constraint is enforced as a
 # rejection at evaluation time (matches the oracle's implicit rejection of
 # invalid LLM proposals — apples-to-apples).
-TRIPLE_SCREEN_SPACE = [
-    Categorical(["4h", "1h"], name="short_tf"),
-    Integer(15, 50, name="slow_ema"),
-    Integer(5, 25, name="fast_ema"),
-    Categorical(["stochastic", "rsi", "force_index_2"], name="oscillator"),
-    Real(0.0, 100.0, name="osc_entry_threshold"),
-    Categorical(SECURITIES, name="security"),
-]
+def _triple_screen_axes() -> list:
+    return [
+        Categorical(["4h", "1h"], name="short_tf"),
+        Integer(15, 50, name="slow_ema"),
+        Integer(5, 25, name="fast_ema"),
+        Categorical(["stochastic", "rsi", "force_index_2"], name="oscillator"),
+        Real(0.0, 100.0, name="osc_entry_threshold"),
+    ]
 
-IMPULSE_SYSTEM_SPACE = [
-    Categorical(["1h", "4h", "1d"], name="timeframe"),
-    Integer(8, 30, name="ema_period"),
-    Integer(6, 18, name="macd_fast"),
-    Integer(20, 40, name="macd_slow"),
-    Integer(5, 15, name="macd_signal"),
-    Categorical(SECURITIES, name="security"),
-]
 
-CHANNEL_FADE_SPACE = [
-    Categorical(["1h", "4h", "1d"], name="timeframe"),
-    Integer(15, 60, name="ema_period"),
-    Real(0.01, 0.10, name="channel_coefficient"),
-    Categorical(["rsi", "macd_hist", "force_index_2"], name="confirmation"),
-    Integer(5, 30, name="divergence_lookback"),
-    Categorical(SECURITIES, name="security"),
-]
+def _impulse_system_axes() -> list:
+    return [
+        Categorical(["1h", "4h", "1d"], name="timeframe"),
+        Integer(8, 30, name="ema_period"),
+        Integer(6, 18, name="macd_fast"),
+        Integer(20, 40, name="macd_slow"),
+        Integer(5, 15, name="macd_signal"),
+    ]
 
-KANGAROO_TAIL_SPACE = [
-    Categorical(["1h", "4h", "1d"], name="timeframe"),
-    Real(1.5, 4.0, name="tail_multiplier"),
-    Integer(10, 30, name="context_bars"),
-    Integer(1, 3, name="entry_lag"),
-    Real(0.3, 1.0, name="target_multiplier"),
-    Categorical(SECURITIES, name="security"),
-]
 
-EMA_DIVERGENCE_SPACE = [
-    Categorical(["1h", "4h", "1d"], name="timeframe"),
-    Integer(15, 50, name="ema_period"),
-    Categorical(["rsi", "macd_hist", "force_index_2"], name="oscillator"),
-    Integer(10, 50, name="divergence_lookback"),
-    Integer(3, 15, name="min_separation"),
-    Categorical(SECURITIES, name="security"),
-]
+def _channel_fade_axes() -> list:
+    return [
+        Categorical(["1h", "4h", "1d"], name="timeframe"),
+        Integer(15, 60, name="ema_period"),
+        Real(0.01, 0.10, name="channel_coefficient"),
+        Categorical(["rsi", "macd_hist", "force_index_2"], name="confirmation"),
+        Integer(5, 30, name="divergence_lookback"),
+    ]
 
-SPACES = {
-    "false_breakout": FALSE_BREAKOUT_SPACE,
-    "triple_screen": TRIPLE_SCREEN_SPACE,
-    "impulse_system": IMPULSE_SYSTEM_SPACE,
-    "channel_fade": CHANNEL_FADE_SPACE,
-    "kangaroo_tail": KANGAROO_TAIL_SPACE,
-    "ema_divergence": EMA_DIVERGENCE_SPACE,
+
+def _kangaroo_tail_axes() -> list:
+    return [
+        Categorical(["1h", "4h", "1d"], name="timeframe"),
+        Real(1.5, 4.0, name="tail_multiplier"),
+        Integer(10, 30, name="context_bars"),
+        Integer(1, 3, name="entry_lag"),
+        Real(0.3, 1.0, name="target_multiplier"),
+    ]
+
+
+def _ema_divergence_axes() -> list:
+    return [
+        Categorical(["1h", "4h", "1d"], name="timeframe"),
+        Integer(15, 50, name="ema_period"),
+        Categorical(["rsi", "macd_hist", "force_index_2"], name="oscillator"),
+        Integer(10, 50, name="divergence_lookback"),
+        Integer(3, 15, name="min_separation"),
+    ]
+
+
+_AXIS_BUILDERS = {
+    "false_breakout": _false_breakout_axes,
+    "triple_screen": _triple_screen_axes,
+    "impulse_system": _impulse_system_axes,
+    "channel_fade": _channel_fade_axes,
+    "kangaroo_tail": _kangaroo_tail_axes,
+    "ema_divergence": _ema_divergence_axes,
 }
+
+
+def build_space(template: str, securities: list[str]) -> list:
+    """Return the locked 5 template axes plus a Categorical 'security' axis."""
+    axes = _AXIS_BUILDERS[template]()
+    axes.append(Categorical(securities, name="security"))
+    return axes
+
+
+# Back-compat: SPACES exposes default-universe spaces for tests and CLI.
+SPACES = {tmpl: build_space(tmpl, DEFAULT_SECURITIES) for tmpl in _AXIS_BUILDERS}
 
 
 # ---------------------------------------------------------------------------
@@ -452,13 +473,19 @@ def run_search(
     n_total: int,
     seed: int,
     console: Console,
+    securities: list[str] | None = None,
+    label: str | None = None,
 ) -> None:
-    space = SPACES[template]
+    if securities is None:
+        securities = DEFAULT_SECURITIES
+    space = build_space(template, securities)
     evaluator = EVALUATORS[template]
 
     console.print(
         f"\n[bold green]Bayesian search[/bold green]  "
         f"template=[cyan]{template}[/cyan]  "
+        f"label=[cyan]{label or '-'}[/cyan]  "
+        f"|U|={len(securities)}  "
         f"n_init={n_init}  n_total={n_total}  seed={seed}"
     )
 
@@ -475,6 +502,7 @@ def run_search(
             "rationale": f"Bayesian (GP+EI) eval #{eval_count['n'] + 1}",
             "optimizer": "bayesian_gp_ei",
             "seed": seed,
+            "cohort": label,
         }
         insert_run(db_path, {
             "timestamp": ts,
@@ -578,7 +606,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--template",
-        choices=[*SPACES.keys(), "all"],
+        choices=[*_AXIS_BUILDERS.keys(), "all"],
         default="all",
     )
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
@@ -598,6 +626,15 @@ def main() -> None:
         "--reset", action="store_true",
         help="Drop and recreate the runs table before searching",
     )
+    parser.add_argument(
+        "--universe", type=str, default=None,
+        help="Comma-separated coin tickers (e.g. 'BTC-PERP,ETH-PERP'). "
+             "Defaults to BTC/ETH/SOL.",
+    )
+    parser.add_argument(
+        "--label", type=str, default=None,
+        help="Cohort label persisted in config_json for later grouping",
+    )
     args = parser.parse_args()
 
     console = Console()
@@ -606,7 +643,11 @@ def main() -> None:
         args.db.unlink()
     init_db(args.db)
 
-    templates = list(SPACES.keys()) if args.template == "all" else [args.template]
+    templates = list(_AXIS_BUILDERS.keys()) if args.template == "all" else [args.template]
+    universe = (
+        [s.strip() for s in args.universe.split(",") if s.strip()]
+        if args.universe else DEFAULT_SECURITIES
+    )
     for tmpl in templates:
         run_search(
             template=tmpl,
@@ -615,6 +656,8 @@ def main() -> None:
             n_total=args.n_total,
             seed=args.seed,
             console=console,
+            securities=universe,
+            label=args.label,
         )
 
     report_summary(args.db, console)

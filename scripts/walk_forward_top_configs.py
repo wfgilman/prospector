@@ -58,23 +58,29 @@ class TopConfig:
     n_trades: int
 
 
-def load_top_configs(db_path: Path, top_n: int, template: str | None = None) -> list[TopConfig]:
-    """Read the top-N scored configs from a ledger DB. Optional template filter."""
+def load_top_configs(
+    db_path: Path,
+    top_n: int,
+    template: str | None = None,
+    cohort: str | None = None,
+) -> list[TopConfig]:
+    """Read the top-N scored configs. Optional template + cohort filters."""
     con = sqlite3.connect(db_path)
-    if template is None:
-        rows = con.execute(
-            "SELECT run_id, template, config_json, securities_json, score, n_trades "
-            "FROM runs WHERE validation_status = 'valid' AND backtest_status = 'scored' "
-            "ORDER BY score DESC LIMIT ?",
-            (top_n,),
-        ).fetchall()
-    else:
-        rows = con.execute(
-            "SELECT run_id, template, config_json, securities_json, score, n_trades "
-            "FROM runs WHERE validation_status = 'valid' AND backtest_status = 'scored' "
-            "AND template = ? ORDER BY score DESC LIMIT ?",
-            (template, top_n),
-        ).fetchall()
+    where = ["validation_status = 'valid'", "backtest_status = 'scored'"]
+    params: list = []
+    if template is not None:
+        where.append("template = ?")
+        params.append(template)
+    if cohort is not None:
+        where.append("json_extract(config_json, '$.cohort') = ?")
+        params.append(cohort)
+    sql = (
+        "SELECT run_id, template, config_json, securities_json, score, n_trades "
+        "FROM runs WHERE " + " AND ".join(where)
+        + " ORDER BY score DESC LIMIT ?"
+    )
+    params.append(top_n)
+    rows = con.execute(sql, params).fetchall()
     con.close()
 
     configs = []
@@ -276,17 +282,24 @@ def main() -> None:
         "--template", type=str, default=None,
         help="Filter to one template; otherwise the global top across templates is used",
     )
+    parser.add_argument(
+        "--cohort", type=str, default=None,
+        help="Filter to one cohort label (read from config_json.cohort)",
+    )
     args = parser.parse_args()
 
     console = Console()
     console.print("[bold green]Walk-forward validation[/bold green]")
     tmpl_label = args.template if args.template else "(all)"
+    cohort_label = args.cohort if args.cohort else "(all)"
     console.print(
         f"DB: [cyan]{args.db}[/cyan]  template=[cyan]{tmpl_label}[/cyan]  "
-        f"top={args.top}  folds={args.folds}"
+        f"cohort=[cyan]{cohort_label}[/cyan]  top={args.top}  folds={args.folds}"
     )
 
-    configs = load_top_configs(args.db, args.top, template=args.template)
+    configs = load_top_configs(
+        args.db, args.top, template=args.template, cohort=args.cohort,
+    )
     if not configs:
         console.print("[red]No scored configs found in DB.[/red]")
         return

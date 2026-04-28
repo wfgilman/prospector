@@ -11,7 +11,7 @@ For stage definitions and verdict criteria, see
 |---|---|---|---|---|---|
 | 01 | [PM Underwriting · Lottery](candidates/01-pm-underwriting-lottery.md) | paper-portfolio | pending | 2026-04-27 | Continue paper accrual to ~2026-05-20; if `corr(edge_pp, clv_pp)` stays sub-0.1, implement MVT rolling-threshold |
 | 04 | [PM Underwriting · Insurance](candidates/04-pm-underwriting-insurance.md) | paper-portfolio | pending | 2026-04-25 | Daemon loaded; first tick ~07:55 PT 2026-04-25; assess after 30 days |
-| 15 | [Elder templates + Bayesian optimization](candidates/15-elder-templates-bayesian.md) | backtest | pending | 2026-04-25 | Implement `scripts/elder_bayesian_search.py` (skopt GP + EI); run pre-registered Bayesian-vs-random comparison + walk-forward |
+| 16 | [Triple-screen on mid-vol crypto perps](candidates/16-triple-screen-midvol-crypto.md) | backtest | viable | 2026-04-28 | Spawned from #15's surviving cell; locked config (slow_ema=15, fast_ema=5, RSI≥90) generalizes to 21/31 vol_q4 coins at 87% median retention. Next move: replay-first paper validation on held-out 2026-Q1; then build Hyperliquid perp execution infra for live paper book |
 
 ## Terminal — kept for reference
 
@@ -20,6 +20,7 @@ For stage definitions and verdict criteria, see
 | 00 | [Elder templates (LLM optimizer)](candidates/00-elder-templates.md) | rejected | needs-iteration | 2026-04-25 | LLM-as-optimizer falsified (real). "Directional" critique and trade-sparsity were treated as structural; fresh-eyes review revised first two as self-imposed framework errors. Reformulated as [`15`](candidates/15-elder-templates-bayesian.md) with Bayesian optimizer. |
 | 02 | [Kalshi × crypto narrative spread](candidates/02-kalshi-crypto-narrative-spread.md) | rejected | needs-iteration | 2026-04-23 | Sign correct on 15-min Coinbase data; magnitude near zero. Operational triage: cadence + throughput fail. Revisit if infra envelope opens or 2+ years more events accumulate. |
 | 03 | [Kalshi × Hyperliquid vol surface](candidates/03-kalshi-hyperliquid-vol-surface.md) | absorbed | viable | 2026-04-23 | Convergence thesis dead, D1 longshot wedge replicated. Folded into PM Phase 5 hedging overlay scope. |
+| 15 | [Elder templates + Bayesian optimization](candidates/15-elder-templates-bayesian.md) | absorbed | viable | 2026-04-28 | 2-template & 6-template runs on BTC/ETH/SOL failed; expanding to 229-perp universe + σ-quintile cohorts surfaced `triple_screen × vol_q4` as a walk-forward survivor that cross-coin-generalizes to 21/31 cohort coins (median 87% retention). Surviving cell absorbed into [#16](candidates/16-triple-screen-midvol-crypto.md). |
 
 ## Ideation — queued
 

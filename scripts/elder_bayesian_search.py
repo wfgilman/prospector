@@ -83,13 +83,17 @@ def _false_breakout_axes() -> list:
     ]
 
 
-# Triple screen: long_tf locked at "1d" (dominant choice in oracle baseline)
-# to keep the space at 6-D. fast_ema < slow_ema constraint is enforced as a
-# rejection at evaluation time (matches the oracle's implicit rejection of
-# invalid LLM proposals — apples-to-apples).
+# Triple screen: tf_combo encodes (long_tf, short_tf) as a single categorical
+# so the optimizer searches all six Elder-style scale pairs in 6-D rather
+# than locking long_tf=1d. fast_ema < slow_ema is enforced as a rejection.
+TRIPLE_SCREEN_TF_COMBOS = [
+    "1d/4h", "1d/1h", "4h/1h", "1w/1d", "1w/4h", "1w/1h",
+]
+
+
 def _triple_screen_axes() -> list:
     return [
-        Categorical(["4h", "1h"], name="short_tf"),
+        Categorical(TRIPLE_SCREEN_TF_COMBOS, name="tf_combo"),
         Integer(15, 50, name="slow_ema"),
         Integer(5, 25, name="fast_ema"),
         Categorical(["stochastic", "rsi", "force_index_2"], name="oscillator"),
@@ -281,10 +285,11 @@ def evaluate_false_breakout(point: list) -> tuple[EvalResult, dict, str]:
 
 def evaluate_triple_screen(point: list) -> tuple[EvalResult, dict, str]:
     """Run one triple_screen config; return (eval, params, security)."""
-    short_tf, slow_ema, fast_ema, oscillator, osc_entry_threshold, security = point
+    tf_combo, slow_ema, fast_ema, oscillator, osc_entry_threshold, security = point
+    long_tf, short_tf = str(tf_combo).split("/")
     params = {
-        "long_tf": "1d",
-        "short_tf": str(short_tf),
+        "long_tf": long_tf,
+        "short_tf": short_tf,
         "slow_ema": int(slow_ema),
         "fast_ema": int(fast_ema),
         "oscillator": str(oscillator),

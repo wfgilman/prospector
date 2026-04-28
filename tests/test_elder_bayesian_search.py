@@ -121,10 +121,11 @@ def test_triple_screen_rejects_invalid_ema_pair(tmp_db: Path) -> None:
     from elder_bayesian_search import evaluate_triple_screen
 
     eval_result, params, sec = evaluate_triple_screen(
-        ["4h", 20, 30, "rsi", 50.0, "BTC-PERP"]
+        ["1d/4h", 20, 30, "rsi", 50.0, "BTC-PERP"]
     )
     assert eval_result.backtest_status == "rejected"
     assert eval_result.rejection_reason == "fast_ema >= slow_ema"
     assert eval_result.score is None
+    assert params["long_tf"] == "1d" and params["short_tf"] == "4h"
     assert params["slow_ema"] == 20 and params["fast_ema"] == 30
     assert sec == "BTC-PERP"

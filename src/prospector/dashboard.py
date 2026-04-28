@@ -38,6 +38,18 @@ _TICK_RE = re.compile(
 )
 _LOG_TS_RE = re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s")
 
+# Elder triple-screen daemon emits one of:
+#   ``log.info("tick: %s", stats)`` (foreground loop)
+#   ``log.info("once: %s", stats)`` (launchd one-shot path)
+# where ``stats`` is a dict with closed/opened/skipped_open/open_after_tick/nav.
+# Extract the integer counters; nav is reflected in the per-card stat.
+_ELDER_TICK_RE = re.compile(
+    r"(?:tick|once):\s*\{[^}]*'closed':\s*(?P<closed>\d+)[^}]*"
+    r"'opened':\s*(?P<opened>\d+)[^}]*"
+    r"'skipped_open':\s*(?P<skipped>\d+)[^}]*"
+    r"'open_after_tick':\s*(?P<open_after>\d+)"
+)
+
 
 @dataclass(frozen=True)
 class TickSummary:
@@ -223,6 +235,149 @@ def build_pnl_series(db_path: Path) -> pd.DataFrame:
     closed["close_time"] = pd.to_datetime(closed["close_time"], utc=True)
     closed["pnl"] = closed["realized_pnl"].cumsum()
     return closed.rename(columns={"close_time": "time"})[["time", "pnl"]]
+
+
+# -- elder triple-screen (crypto_perp schema) loaders ----------------------
+#
+# The kalshi book stores `realized_pnl` and `close_time`; the elder book
+# stores `net_pnl` (gross − fees − funding) and `exit_time`. Loaders below
+# adapt the same dataclasses to the elder schema so the dashboard can
+# present both books side-by-side.
+
+
+def _load_summary_elder(db_path: Path) -> PortfolioSummary | None:
+    if not db_path.exists():
+        return None
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        initial = conn.execute(
+            "SELECT value FROM meta WHERE key = 'initial_nav'"
+        ).fetchone()
+        initial_nav = float(initial["value"]) if initial else 0.0
+        realized = conn.execute(
+            "SELECT COALESCE(SUM(net_pnl), 0) AS r "
+            "FROM positions WHERE status = 'closed'"
+        ).fetchone()["r"]
+        locked = conn.execute(
+            "SELECT COALESCE(SUM(risk_budget), 0) AS r "
+            "FROM positions WHERE status = 'open'"
+        ).fetchone()["r"]
+        n_open = conn.execute(
+            "SELECT COUNT(*) AS n FROM positions WHERE status = 'open'"
+        ).fetchone()["n"]
+        today = datetime.now(timezone.utc).date().isoformat()
+        trades_today = conn.execute(
+            "SELECT COUNT(*) AS n FROM positions WHERE DATE(entry_time) = ?",
+            (today,),
+        ).fetchone()["n"]
+    nav = initial_nav + float(realized)
+    return PortfolioSummary(
+        nav=nav,
+        cash=nav - float(locked),
+        locked_risk=float(locked),
+        open_positions=int(n_open),
+        trades_today=int(trades_today),
+        realized_pnl=float(realized),
+        initial_nav=initial_nav,
+    )
+
+
+def _pnl_series_elder(db_path: Path) -> pd.DataFrame:
+    if not db_path.exists():
+        return pd.DataFrame(columns=["time", "pnl"])
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        closed = pd.read_sql_query(
+            "SELECT exit_time, net_pnl FROM positions "
+            "WHERE status = 'closed' AND exit_time IS NOT NULL "
+            "ORDER BY exit_time",
+            conn,
+        )
+    if closed.empty:
+        return pd.DataFrame(
+            [{"time": datetime.now(timezone.utc), "pnl": 0.0}]
+        )
+    closed["exit_time"] = pd.to_datetime(closed["exit_time"], utc=True)
+    closed["pnl"] = closed["net_pnl"].cumsum()
+    return closed.rename(columns={"exit_time": "time"})[["time", "pnl"]]
+
+
+def _load_positions_elder(
+    db_path: Path, status: str | None = None
+) -> pd.DataFrame:
+    if not db_path.exists():
+        return pd.DataFrame()
+    query = "SELECT * FROM positions"
+    params: tuple = ()
+    if status is not None:
+        query += " WHERE status = ?"
+        params = (status,)
+    query += " ORDER BY entry_time DESC"
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        df = pd.read_sql_query(query, conn, params=params)
+    if df.empty:
+        return df
+    df["entry_time"] = pd.to_datetime(df["entry_time"], utc=True)
+    df["exit_time"] = pd.to_datetime(df["exit_time"], utc=True)
+    return df
+
+
+def summary_for(entry: StrategyEntry) -> PortfolioSummary | None:
+    """Schema-dispatched summary loader. Used by render_comparison."""
+    if entry.schema == "kalshi_binary":
+        return load_portfolio_summary(entry.portfolio_db)
+    if entry.schema == "crypto_perp":
+        return _load_summary_elder(entry.portfolio_db)
+    raise ValueError(f"unknown schema: {entry.schema}")
+
+
+def pnl_series_for(entry: StrategyEntry) -> pd.DataFrame:
+    """Schema-dispatched cumulative-P&L series. Used by render_comparison."""
+    if entry.schema == "kalshi_binary":
+        return build_pnl_series(entry.portfolio_db)
+    if entry.schema == "crypto_perp":
+        return _pnl_series_elder(entry.portfolio_db)
+    raise ValueError(f"unknown schema: {entry.schema}")
+
+
+def load_elder_tick_history(
+    log_dir: Path, limit: int = 50
+) -> list[TickSummary]:
+    """Parse the elder daemon's `tick: {...}` lines.
+
+    Reuses :class:`TickSummary` for shape compatibility with the kalshi
+    renderer: ``entered`` ← opened, ``rejected`` ← skipped_open,
+    ``candidates`` ← open_after_tick, ``resolved`` ← closed. Voided/shadow
+    are zero (the elder book has no voids and no shadow ledger today).
+    """
+    if not log_dir.exists():
+        return []
+    files = sorted(log_dir.glob("paper_trade-*.log"))[-2:]
+    ticks: list[TickSummary] = []
+    for path in files:
+        prev_ts: datetime | None = None
+        for line in path.read_text(errors="replace").splitlines():
+            ts_match = _LOG_TS_RE.match(line)
+            if ts_match:
+                try:
+                    prev_ts = datetime.fromisoformat(ts_match["ts"]).replace(
+                        tzinfo=timezone.utc
+                    )
+                except ValueError:
+                    prev_ts = None
+            tick_match = _ELDER_TICK_RE.search(line)
+            if tick_match:
+                ticks.append(
+                    TickSummary(
+                        timestamp=prev_ts,
+                        entered=int(tick_match["opened"]),
+                        rejected=int(tick_match["skipped"]),
+                        shadow=0,
+                        candidates=int(tick_match["open_after"]),
+                        resolved=int(tick_match["closed"]),
+                        voided=0,
+                    )
+                )
+    return ticks[-limit:]
 
 
 # -- theme ------------------------------------------------------------------
@@ -547,6 +702,8 @@ def render_strategy(entry: StrategyEntry) -> None:
     """Dispatch to the renderer matching the strategy's position schema."""
     if entry.schema == "kalshi_binary":
         _render_kalshi_binary(entry)
+    elif entry.schema == "crypto_perp":
+        _render_crypto_perp(entry)
     else:
         import streamlit as st
 
@@ -572,7 +729,7 @@ def render_comparison(entries: list[StrategyEntry]) -> None:
     alt.themes.register("quant_terminal", _altair_theme)
     alt.themes.enable("quant_terminal")
 
-    summaries = [(e, load_portfolio_summary(e.portfolio_db)) for e in entries]
+    summaries = [(e, summary_for(e)) for e in entries]
 
     cols = st.columns(len(summaries))
     for col, (entry, summary) in zip(cols, summaries):
@@ -590,7 +747,7 @@ def render_comparison(entries: list[StrategyEntry]) -> None:
 
     overlays = []
     for entry, _ in summaries:
-        df = build_pnl_series(entry.portfolio_db)
+        df = pnl_series_for(entry)
         if df.empty:
             continue
         df = df.copy()
@@ -703,6 +860,306 @@ def _render_kalshi_binary(entry: StrategyEntry) -> None:
     _render_pnl(entry.portfolio_db)
     _render_category_sections(entry.portfolio_db)
     _render_positions_tabs(entry.portfolio_db, entry.log_dir)
+
+
+def _render_crypto_perp(entry: StrategyEntry) -> None:
+    """Renderer for the elder triple-screen perp book.
+
+    Elder positions don't have categories or expected-close times, so the
+    by-category section is dropped and the positions tabs use the elder
+    column set (coin, direction, exit_reason, gross/fees/funding/net P&L).
+    """
+    import altair as alt
+    import streamlit as st
+
+    alt.themes.register("quant_terminal", _altair_theme)
+    alt.themes.enable("quant_terminal")
+
+    summary = _load_summary_elder(entry.portfolio_db)
+    if summary is None:
+        st.info(
+            f"Portfolio DB not found at {entry.portfolio_db}. "
+            "First tick fires at the next 4h boundary."
+        )
+        return
+
+    _render_stat_card_elder(entry, summary)
+    _render_pnl_elder(entry.portfolio_db)
+    _render_positions_tabs_elder(entry.portfolio_db, entry.log_dir)
+
+
+def _render_stat_card_elder(
+    entry: StrategyEntry, summary: PortfolioSummary
+) -> None:
+    """Stat card matching the kalshi layout but reading the elder log."""
+    import streamlit as st
+
+    delta = summary.nav - summary.initial_nav
+    roi = delta / summary.initial_nav * 100 if summary.initial_nav else 0.0
+    direction = "up" if delta > 0 else ("down" if delta < 0 else "flat")
+    arrow = "▲" if direction == "up" else ("▼" if direction == "down" else "◆")
+
+    realized_cls = (
+        "up" if summary.realized_pnl > 0
+        else ("down" if summary.realized_pnl < 0 else "flat")
+    )
+    locked_pct = (
+        summary.locked_risk / summary.nav * 100 if summary.nav else 0.0
+    )
+
+    ticks = load_elder_tick_history(entry.log_dir, limit=1)
+    last = ticks[-1] if ticks else None
+    last_tick_str = (
+        last.timestamp.strftime("%Y-%m-%d %H:%M UTC")
+        if last and last.timestamp
+        else "—"
+    )
+
+    st.markdown(
+        f"""
+        <div class="qt-stat-card">
+            <div class="qt-stat-card-head">
+                <div class="qt-stat-card-name">{entry.display_name}</div>
+                <div class="qt-stat-card-tick">Last tick · {last_tick_str}</div>
+            </div>
+            <div class="qt-stat-card-row">
+                <div class="qt-stat-card-item primary">
+                    <div class="qt-kpi-label">NAV</div>
+                    <div class="qt-stat-card-nav">${summary.nav:,.2f}</div>
+                    <div class="qt-stat-card-delta {direction}">
+                        {arrow} {delta:+,.2f} · {roi:+.2f}%
+                    </div>
+                </div>
+                <div class="qt-stat-card-item">
+                    <div class="qt-kpi-label">Seed</div>
+                    <div class="qt-kpi-value">${summary.initial_nav:,.0f}</div>
+                </div>
+                <div class="qt-stat-card-item">
+                    <div class="qt-kpi-label">Net P&amp;L</div>
+                    <div class="qt-kpi-value {realized_cls}">${summary.realized_pnl:+,.2f}</div>
+                </div>
+                <div class="qt-stat-card-item">
+                    <div class="qt-kpi-label">Locked Risk</div>
+                    <div class="qt-kpi-value">${summary.locked_risk:,.2f}</div>
+                    <div class="qt-kpi-sub">{locked_pct:.2f}% of NAV</div>
+                </div>
+                <div class="qt-stat-card-item">
+                    <div class="qt-kpi-label">Open</div>
+                    <div class="qt-kpi-value">{summary.open_positions}</div>
+                </div>
+                <div class="qt-stat-card-item">
+                    <div class="qt-kpi-label">Trades Today</div>
+                    <div class="qt-kpi-value">{summary.trades_today}</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_pnl_elder(db_path: Path) -> None:
+    import altair as alt
+    import streamlit as st
+
+    pnl_df = _pnl_series_elder(db_path)
+    st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="qt-eyebrow">Net P&amp;L trajectory</div>',
+        unsafe_allow_html=True,
+    )
+    if len(pnl_df) >= 2:
+        plot_df = pnl_df.copy()
+        plot_df["pos"] = plot_df["pnl"].clip(lower=0)
+        plot_df["neg"] = plot_df["pnl"].clip(upper=0)
+        area_pos = (
+            alt.Chart(plot_df)
+            .mark_area(
+                opacity=0.3,
+                color=_PALETTE["accent"],
+                interpolate="monotone",
+                line={"color": _PALETTE["accent"], "strokeWidth": 1.75},
+            )
+            .encode(
+                x=alt.X("time:T", title=None),
+                y=alt.Y("pos:Q", title="Net P&L ($)"),
+            )
+        )
+        area_neg = (
+            alt.Chart(plot_df)
+            .mark_area(
+                opacity=0.3,
+                color=_PALETTE["loss"],
+                interpolate="monotone",
+                line={"color": _PALETTE["loss"], "strokeWidth": 1.75},
+            )
+            .encode(x="time:T", y=alt.Y("neg:Q"))
+        )
+        zero_rule = (
+            alt.Chart(pd.DataFrame({"y": [0]}))
+            .mark_rule(color=_PALETTE["border"], strokeDash=[2, 3])
+            .encode(y="y:Q")
+        )
+        st.altair_chart(
+            (area_pos + area_neg + zero_rule).properties(height=180),
+            width="stretch",
+        )
+    else:
+        st.caption("Trajectory will render after the first stop/target hit.")
+
+
+def _render_positions_tabs_elder(db_path: Path, log_dir: Path) -> None:
+    import streamlit as st
+
+    st.markdown("<div style='height:2rem;'></div>", unsafe_allow_html=True)
+    tab_open, tab_closed, tab_ticks = st.tabs(
+        ["Open positions", "Closed positions", "Recent ticks"]
+    )
+    with tab_open:
+        _render_open_positions_elder(db_path)
+    with tab_closed:
+        _render_closed_positions_elder(db_path)
+    with tab_ticks:
+        _render_tick_stream_elder(log_dir)
+
+
+def _render_open_positions_elder(db_path: Path) -> None:
+    import streamlit as st
+
+    open_df = _load_positions_elder(db_path, status="open")
+    if open_df.empty:
+        st.caption("No open positions.")
+        return
+
+    display_cols = [
+        "coin",
+        "direction",
+        "units",
+        "entry_price",
+        "stop_price",
+        "target_price",
+        "risk_budget",
+        "entry_time",
+    ]
+    display_df = open_df[display_cols].copy()
+    display_df["entry_time"] = display_df["entry_time"].dt.strftime(
+        "%m-%d %H:%M"
+    )
+    st.dataframe(
+        display_df,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "units": st.column_config.NumberColumn(format="%.4f"),
+            "entry_price": st.column_config.NumberColumn(format="%.4f"),
+            "stop_price": st.column_config.NumberColumn(format="%.4f"),
+            "target_price": st.column_config.NumberColumn(format="%.4f"),
+            "risk_budget": st.column_config.NumberColumn(format="$%.2f"),
+        },
+    )
+
+
+def _render_closed_positions_elder(db_path: Path) -> None:
+    import streamlit as st
+
+    closed_df = _load_positions_elder(db_path, status="closed")
+    if closed_df.empty:
+        st.caption("No closed positions yet.")
+        return
+
+    total_pnl = float(closed_df["net_pnl"].sum())
+    total_fees = float(closed_df["fees_paid"].sum())
+    total_funding = float(closed_df["funding_cost"].sum())
+    wins = int((closed_df["net_pnl"] > 0).sum())
+    losses = int((closed_df["net_pnl"] <= 0).sum())
+    pnl_cls = "up" if total_pnl > 0 else ("down" if total_pnl < 0 else "flat")
+    st.markdown(
+        f"""
+        <div style="display:flex; gap:2rem; margin-bottom:0.75rem; flex-wrap:wrap;">
+            <div class="qt-cat-stat">
+                <div class="qt-cat-stat-label">Closed</div>
+                <div class="qt-cat-stat-value">{len(closed_df)}</div>
+            </div>
+            <div class="qt-cat-stat">
+                <div class="qt-cat-stat-label">Record</div>
+                <div class="qt-cat-stat-value">{wins}W / {losses}L</div>
+            </div>
+            <div class="qt-cat-stat">
+                <div class="qt-cat-stat-label">Net P&amp;L</div>
+                <div class="qt-cat-stat-value {pnl_cls}">${total_pnl:+,.2f}</div>
+            </div>
+            <div class="qt-cat-stat">
+                <div class="qt-cat-stat-label">Fees</div>
+                <div class="qt-cat-stat-value">${total_fees:,.2f}</div>
+            </div>
+            <div class="qt-cat-stat">
+                <div class="qt-cat-stat-label">Funding</div>
+                <div class="qt-cat-stat-value">${total_funding:+,.2f}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    display_cols = [
+        "coin",
+        "direction",
+        "units",
+        "entry_price",
+        "exit_price",
+        "exit_reason",
+        "entry_time",
+        "exit_time",
+        "gross_pnl",
+        "fees_paid",
+        "funding_cost",
+        "net_pnl",
+    ]
+    display_df = closed_df[display_cols].copy()
+    display_df = display_df.sort_values("exit_time", ascending=False)
+    display_df["entry_time"] = display_df["entry_time"].dt.strftime("%m-%d %H:%M")
+    display_df["exit_time"] = display_df["exit_time"].dt.strftime("%m-%d %H:%M")
+    st.dataframe(
+        display_df.style.format(
+            {
+                "units": "{:.4f}",
+                "entry_price": "{:.4f}",
+                "exit_price": "{:.4f}",
+                "gross_pnl": "${:+,.2f}",
+                "fees_paid": "${:,.2f}",
+                "funding_cost": "${:+,.2f}",
+                "net_pnl": "${:+,.2f}",
+            }
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+
+
+def _render_tick_stream_elder(log_dir: Path) -> None:
+    import streamlit as st
+
+    ticks = load_elder_tick_history(log_dir, limit=20)
+    if not ticks:
+        st.caption(f"No tick log entries under {log_dir}.")
+        return
+    tick_df = pd.DataFrame(
+        [
+            {
+                "time": (
+                    t.timestamp.strftime("%m-%d %H:%M UTC")
+                    if t.timestamp
+                    else "—"
+                ),
+                "closed": t.resolved,
+                "opened": t.entered,
+                "skipped": t.rejected,
+                "open_after": t.candidates,
+            }
+            for t in ticks[::-1]
+        ]
+    )
+    st.dataframe(tick_df, width="stretch", hide_index=True)
 
 
 def _render_stat_card(entry: StrategyEntry, summary: PortfolioSummary) -> None:

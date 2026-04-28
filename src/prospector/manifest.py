@@ -14,7 +14,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-SUPPORTED_SCHEMAS = frozenset({"kalshi_binary"})
+SUPPORTED_SCHEMAS = frozenset({"kalshi_binary", "crypto_perp"})
 
 
 @dataclass(frozen=True)

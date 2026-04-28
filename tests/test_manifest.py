@@ -54,7 +54,7 @@ def test_load_manifest_rejects_unknown_schema(tmp_path: Path) -> None:
         [[strategy]]
         name = "mystery"
         display_name = "Mystery"
-        schema = "crypto_perp"
+        schema = "futures_calendar"
         portfolio_db = "mystery/portfolio.db"
         log_dir = "mystery/logs"
         launchd_label = "com.example"

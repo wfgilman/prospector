@@ -34,3 +34,12 @@ portfolio_db = "pm_underwriting_insurance/portfolio.db"
 log_dir = "pm_underwriting_insurance/logs"
 launchd_label = "com.prospector.paper-trade-insurance"
 enabled = true
+
+[[strategy]]
+name = "elder_triple_screen"
+display_name = "Elder Triple-Screen · vol_q4 perps"
+schema = "crypto_perp"
+portfolio_db = "elder_triple_screen/portfolio.db"
+log_dir = "elder_triple_screen/logs"
+launchd_label = "com.prospector.paper-trade-elder"
+enabled = true

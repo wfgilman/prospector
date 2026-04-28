@@ -219,3 +219,4 @@ in real exchange accounts, not local SQLite).
 | Date | Decision | Rationale |
 |---|---|---|
 | 2026-04-25 | Runbook reorganized to track docs reorg | Pointers updated to new platform/ + components/ locations; obsolete sections removed |
+| 2026-04-28 | Elder triple-screen daemon section added | Candidate 16 advanced to paper-portfolio; new daemon, plist, log location, OHLCV-refresh-on-tick semantics that differ from the PM books |

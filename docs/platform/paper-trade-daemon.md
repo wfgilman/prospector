@@ -3,9 +3,18 @@
 > `scripts/paper_trade.py` — the single runner that powers every PM
 > Underwriting paper book. Multi-book by parametrization, not by fork.
 
-**Status:** Two books in production: Lottery (full price range) and
-Insurance (0.55-0.75 entry-price band). Both share calibration store and
-σ-table; books are independent at the portfolio-DB level.
+**Status:** Two PM Underwriting books in production via this daemon:
+Lottery (full price range) and Insurance (0.55-0.75 entry-price band).
+Both share calibration store and σ-table; books are independent at the
+portfolio-DB level.
+
+The Elder Triple-Screen perp book (candidate 16) runs as a *separate*
+daemon — `scripts/paper_trade_elder.py` — because its position schema
+(`crypto_perp`), execution venue (Hyperliquid), and signal model
+(triple-screen on 1d/4h bars) all differ. See
+[`../rd/candidates/16-triple-screen-midvol-crypto.md`](../rd/candidates/16-triple-screen-midvol-crypto.md)
+and the `Elder triple-screen book` section of
+[`../reference/runbook.md`](../reference/runbook.md).
 
 ---
 
@@ -37,7 +46,7 @@ A "book" is just a different invocation of `paper_trade.py` with:
   parametric scope)
 - A different launchd plist + wrapper script
 
-Two books currently:
+Two PM Underwriting books currently:
 
 | Book | DB path | Band | Min edge | Wrapper | Plist |
 |---|---|---|---|---|---|

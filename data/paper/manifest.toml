@@ -5,9 +5,12 @@
 # Paths are resolved relative to this file. Each entry declares:
 #   name         — stable identifier, used as the DB subdirectory and in logs.
 #   display_name — label shown in the dashboard.
-#   schema       — position schema. Today only "kalshi_binary" exists; add a
-#                  new schema name and a matching dashboard renderer when a
-#                  new position type (e.g. crypto_perp) ships.
+#   schema       — position schema. Two are wired today: "kalshi_binary"
+#                  (PM Underwriting books) and "crypto_perp" (elder
+#                  triple-screen perps). Add a new schema name and a
+#                  matching dashboard renderer when a new position type
+#                  ships; see docs/platform/dashboard.md "Adding a new
+#                  schema" for the playbook.
 #   portfolio_db — SQLite path relative to data/paper/.
 #   log_dir      — directory the launchd wrapper writes into, relative to
 #                  data/paper/. Used by the dashboard to surface last-tick

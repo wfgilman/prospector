@@ -240,8 +240,10 @@ paper-trade daemons (one plist per book). See
 
 **Paper portfolio / Paper trading**
 Forward-testing a strategy against live market data without placing
-real orders. The two PM Underwriting books currently in production are
-both paper.
+real orders. Three books currently in production, all paper: PM
+Underwriting Lottery, PM Underwriting Insurance (both
+`kalshi_binary` schema), and Elder Triple-Screen vol_q4 perps
+(`crypto_perp` schema).
 
 **Pre-registration**
 Locking hyperparameters + pass criteria + null benchmark *in code*

@@ -178,10 +178,13 @@ to small parameter perturbations.
 Funding-rate cost was modeled upfront rather than retrofitted. New
 module `src/prospector/harness/funding.py` integrates per-trade
 funding charges from Hyperliquid's hourly funding-rate history
-(LONG pays funding when rate > 0; SHORT receives). 16 of 31 vol_q4
-coins had funding history pulled (rest throttled by API rate limit;
-balance pending). Replay script:
-`scripts/elder_replay_paper.py`.
+(LONG pays funding when rate > 0; SHORT receives). 19 of 31 vol_q4
+coins have funding history available; the remaining 12 returned
+empty responses from the API (most were listed too recently for the
+requested 730-day window). Coins without funding data fall back to
+zero funding cost in the replay; given funding is 0.3-0.6% of P&L
+for the funded subset, the missing coverage doesn't shift the
+decision. Replay script: `scripts/elder_replay_paper.py`.
 
 **Full-history mode** (28 of 31 vol_q4 coins, 730 days, in-sample to the search):
 

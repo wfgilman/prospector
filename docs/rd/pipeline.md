@@ -11,7 +11,7 @@ For stage definitions and verdict criteria, see
 |---|---|---|---|---|---|
 | 01 | [PM Underwriting · Lottery](candidates/01-pm-underwriting-lottery.md) | paper-portfolio | pending | 2026-04-27 | Continue paper accrual to ~2026-05-20; if `corr(edge_pp, clv_pp)` stays sub-0.1, implement MVT rolling-threshold |
 | 04 | [PM Underwriting · Insurance](candidates/04-pm-underwriting-insurance.md) | paper-portfolio | pending | 2026-04-25 | Daemon loaded; first tick ~07:55 PT 2026-04-25; assess after 30 days |
-| 16 | [Triple-screen on mid-vol crypto perps](candidates/16-triple-screen-midvol-crypto.md) | backtest | viable | 2026-04-28 | Spawned from #15's surviving cell; locked config (slow_ema=15, fast_ema=5, RSI≥90) generalizes to 21/31 vol_q4 coins at 87% median retention. Next move: replay-first paper validation on held-out 2026-Q1; then build Hyperliquid perp execution infra for live paper book |
+| 16 | [Triple-screen on mid-vol crypto perps](candidates/16-triple-screen-midvol-crypto.md) | paper-portfolio | pending | 2026-04-28 | Funding-aware replay PASSES all paper criteria (mean Sharpe 4.49 holdout, funding 0.6% of P&L). Paper book wired and smoke-tested; 4h-cadence launchd plist ready. Next: launch + accrue 30 days; T+30 eval ~2026-05-28 |
 
 ## Terminal — kept for reference
 

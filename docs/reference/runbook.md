@@ -96,6 +96,28 @@ launchctl list | grep paper-trade-insurance
 tail -f data/paper/pm_underwriting_insurance/logs/paper_trade-$(date -u +%Y%m%d).log
 ```
 
+**Elder triple-screen book** (4h cadence, candidate 16):
+```bash
+# manual one-shot
+PYTHONPATH=src python scripts/paper_trade_elder.py --once
+
+# foreground loop
+PYTHONPATH=src python scripts/paper_trade_elder.py --interval 14400
+
+# launchd
+cp scripts/launchd/com.prospector.paper-trade-elder.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.prospector.paper-trade-elder.plist
+launchctl list | grep paper-trade-elder
+tail -f data/paper/elder_triple_screen/logs/paper_trade-$(date -u +%Y%m%d).log
+```
+
+The elder daemon refreshes Hyperliquid OHLCV at each tick, sweeps
+open positions for stop/target hits, and opens new positions when the
+locked triple-screen config (`slow_ema=15, fast_ema=5, RSI ≥ 93.7`)
+fires on the just-printed 4h bar. Funding cost integrates from the
+hourly funding-rate history at close time. See
+[`docs/rd/candidates/16-triple-screen-midvol-crypto.md`](../rd/candidates/16-triple-screen-midvol-crypto.md).
+
 Full daemon CLI surface in [`platform/paper-trade-daemon.md`](../platform/paper-trade-daemon.md).
 
 ### Stop a book

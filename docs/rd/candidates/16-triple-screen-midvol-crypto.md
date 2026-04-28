@@ -12,19 +12,20 @@ parent-candidate: 15
 
 ## Status snapshot
 
-- **Stage:** backtest (advance to paper-portfolio gated on Hyperliquid
-  perp execution infrastructure — see Open questions)
-- **Verdict:** viable — promoted from
+- **Stage:** paper-portfolio (paper book wired and live as of 2026-04-28)
+- **Verdict:** pending — promoted from
   [candidate 15](15-elder-templates-bayesian.md) on the basis of
   walk-forward survival at 5-fold (6/10 top configs pass strict
   criterion) and cross-coin generalization to 21 of 31 cohort coins
   (median retention 87%, max 121%). Funding-aware replay (2026-04-28)
-  passes all three pre-committed paper-portfolio criteria with wide
-  margin in both full-history and 150-day-holdout modes.
-- **Next move:** Build a Hyperliquid perp execution path so this can
-  run as a paper book. The PM Underwriting paper-trade daemon is
-  Kalshi-only; this needs a separate `strategies/elder_triple_screen/`
-  module + Hyperliquid execution wiring.
+  passes all three pre-committed paper criteria with wide margin in
+  both full-history and 150-day-holdout modes. Live paper book is the
+  next discriminator.
+- **Next move:** Let the paper book accrue 30 days under launchd at
+  the 4h cadence. Re-evaluate against the pre-committed paper criteria
+  around 2026-05-28. CLV-equivalent metric (mid-price snapshots vs.
+  entry) is now instrumented (`mid_snapshots` table) and ready to
+  evaluate at the 30-day mark.
 
 ## Ideation
 
@@ -241,15 +242,46 @@ clearing the threshold (4.49 × 0.5 = 2.24 aggregate, still ≥ 1.0). But
 the live paper book is the definitive test — replay numbers should be
 read as *upper bounds*, not point estimates.
 
-### Live paper plan (post-infra)
+### Live paper plan (built and deployed 2026-04-28)
 
-1. Build `src/prospector/strategies/elder_triple_screen/` mirroring
-   `pm_underwriting/` structure.
-2. Wire Hyperliquid perp execution (paper-only initially — record
-   intended trades, mark to mid).
-3. Run on top-10 vol_q4 coins; record per-coin P&L, aggregate Sharpe.
-4. After 30 days: evaluate against the pre-committed criteria above
-   plus CLV-equivalent metric.
+Paper-only execution: positions are recorded at the printing bar's
+close, marked-to-close on every tick, and exited on stop or target.
+Funding cost integrates from the hourly funding-rate history at close
+time. No real Hyperliquid orders are placed.
+
+| Component | Path |
+|---|---|
+| Strategy module | `src/prospector/strategies/elder_triple_screen/` |
+| Locked config | `signal.LOCKED_PARAMS` (config #3895; module-level constant) |
+| Portfolio DB | `data/paper/elder_triple_screen/portfolio.db` |
+| Daemon entrypoint | `scripts/paper_trade_elder.py` |
+| launchd plist | `scripts/launchd/com.prospector.paper-trade-elder.plist` (4h cadence) |
+| Logs | `data/paper/elder_triple_screen/logs/paper_trade-YYYYMMDD.log` |
+| Mid-price snapshots | `mid_snapshots` table (CLV-equivalent input) |
+
+Universe: vol_q4 quintile from
+`data/cohorts/vol_quintiles_2026-04-28.json` (31 coins).
+
+Sizing: Iron Triangle 2% per trade, capped at 5% of NAV per position.
+At most 10 concurrent open positions.
+
+Run-once smoke test (2026-04-28 ~05:34 UTC) loaded the cohort
+universe, ran on existing OHLCV, opened/closed nothing (no fresh
+signals at the latest bar) — clean run, NAV $10,000 unchanged.
+
+### Live paper evaluation (T+30 = ~2026-05-28)
+
+After 30 days under launchd:
+1. Aggregate Sharpe (annualized) — must be ≥ 1.0
+2. Median per-coin Sharpe — must be ≥ 0.5
+3. Max drawdown — must be ≤ 25%
+4. CLV-equivalent (mean entry vs. local-mean fill) — must be trending
+   non-negative; instrumented via `mid_snapshots` rows recorded each
+   tick on coins holding a position.
+
+If all four pass, advance to live trading review. If any fail,
+diagnose (which coin/regime broke the assumption?) and decide
+needs-iteration vs. non-viable.
 
 ## Live trading
 
@@ -266,6 +298,8 @@ read as *upper bounds*, not point estimates.
 | 2026-04-28 | Broader-TF re-search closed the `long_tf` gap | User flagged that triple_screen had `long_tf` locked at 1d. Pulled 1h+1w for vol_q4, extended axes to a `tf_combo` categorical covering all six pairs. 1d/4h dominates (110/200 evals, max 200, mean 156); 1w/1d gets zero scored configs (sparse weekly bars). #3895 unchanged as the recommended config. |
 | 2026-04-28 | Funding modeled upfront; replay PASSES all criteria | New `harness/funding.py` integrates Hyperliquid hourly funding into per-trade cost. Full-history Sharpe 5.29 / holdout 4.49; funding cost is 0.3-0.6% of P&L magnitude (cancels because triple_screen takes both directions) |
 | 2026-04-28 | **Verdict reaffirmed: GO** for paper-portfolio advance | All three quantitative pre-committed criteria pass by 4-10× margin in both replay modes. Sharpe magnitude is at the optimistic end; realistic 30-50% haircut still clears thresholds. Live paper book remains the definitive test. |
+| 2026-04-28 | Paper book wired, smoke-tested, ready for launchd | New `strategies/elder_triple_screen/` module mirrors PM Underwriting's pattern (portfolio + signal + monitor + runner). `scripts/paper_trade_elder.py` is the entrypoint. 4h-cadence launchd plist provided. Locked config is captured as a module-level constant so live execution can't drift from the validated parameters. Mid-price snapshots are recorded for CLV-equivalent computation. |
+| 2026-04-28 | Stage: backtest → paper-portfolio | Infra build complete; paper book is the gating discriminator from here. T+30 evaluation planned ~2026-05-28. |
 
 ## Open questions
 

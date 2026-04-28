@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.prospector.paper-trade-elder</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/wgilman/workspace/prospector/scripts/paper_trade_elder_launchd.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/wgilman/workspace/prospector</string>
+
+    <!-- 4h cadence aligned with the short_tf bar close. launchd queues
+         a catch-up tick if the Mac was asleep at the scheduled time. -->
+    <key>StartInterval</key>
+    <integer>14400</integer>
+
+    <!-- Don't fire at load time; first tick waits for the interval. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/wgilman/workspace/prospector/data/paper/elder_triple_screen/logs/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/wgilman/workspace/prospector/data/paper/elder_triple_screen/logs/launchd.log</string>
+</dict>
+</plist>

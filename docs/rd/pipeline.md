@@ -27,7 +27,7 @@ For stage definitions and verdict criteria, see
 |---|---|---|---|---|
 | 05 | [Weather ensemble](candidates/05-weather-ensemble.md) | strategy-families.md #12 | next-track | Daily cadence, many hundreds of events/year; pair with NWS AFD LLM alt-data ([component](../components/llm-altdata-extraction.md)) |
 | 06 | [Token unlocks](candidates/06-token-unlocks.md) | strategy-families.md #2 | borderline | Weekly-to-daily cadence, ~120-360 events/yr; throughput borderline |
-| 07 | [Three-venue PM divergence](candidates/07-three-venue-pm-divergence.md) | fresh-eyes T5 | tier-2 | Kalshi × Polymarket × HIP-4 (when live); audience mismatch goes 3-axis |
+| 07 | [Three-venue PM divergence](candidates/07-three-venue-pm-divergence.md) | fresh-eyes T5 | tier-2 | Kalshi × Polymarket × HIP-4. HIP-4 mainnet window Jun–Sep 2026 (Polymarket-implied 85%/99%); build Polymarket data layer to be ready ~mid-June |
 | 08 | [Dispersion trade](candidates/08-dispersion-trade.md) | fresh-eyes T4 | tier-1 | Buy series-winner / sell parlay legs; delta-neutral parlay-overpricing expression |
 | 09 | [Kalshi × CME weather convergence](candidates/09-kalshi-cme-weather-convergence.md) | fresh-eyes T8 | tier-2 | Same NOAA underlying, different audiences; needs employer-policy verification on commodity futures |
 | 10 | [Slow book (28d+ rejections)](candidates/10-slow-book-shadow-rejections.md) | fresh-eyes T7 | tier-2 | Replay shadow-ledger rejections at weekly cadence; long-duration markets |

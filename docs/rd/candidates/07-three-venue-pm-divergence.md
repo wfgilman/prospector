@@ -3,7 +3,7 @@ id: 07
 name: Three-venue prediction-market divergence
 status: ideation
 verdict: pending
-last-update: 2026-04-25
+last-update: 2026-04-27
 related-components: []
 ---
 
@@ -12,8 +12,13 @@ related-components: []
 ## Status snapshot
 
 - **Stage:** ideation
-- **Verdict:** pending — gated on HIP-4 mainnet (testnet live since Feb 2026; mainnet TBD)
-- **Next move:** Verify HIP-4 mainnet timeline; build Polymarket data layer (~2 weeks) so the third venue plugs in when ready.
+- **Verdict:** pending — gated on HIP-4 mainnet. Polymarket-implied
+  timeline (read 2026-04-27) prices Jun 30 at 85% / Sep 30 at 99%; the
+  deployment window is **June–September 2026**.
+- **Next move:** Build Polymarket data layer to be ready by ~mid-June
+  2026 (when implied probability of HIP-4 mainnet crosses ~80%). Two-axis
+  Kalshi↔Polymarket validation can run in the meantime — proves the
+  divergence-extraction pipeline before the third venue arrives.
 
 ## Ideation
 
@@ -66,6 +71,7 @@ small-player axiom (axiom 2).
 | 2026-04-25 | Surfaced in fresh-eyes review as T5 (Tier 2) | Audience-mismatch goes 3-axis when HIP-4 ships |
 | 2026-04-25 | HIP-4 timeline noted in [`reference/external-landscape.md`](../../reference/external-landscape.md) | Testnet Feb 2026; mainnet TBD |
 | 2026-04-25 | Recommendation: build Polymarket data layer now, HIP-4 plugs in later | ~2 weeks data work; pre-positions for the 3-venue trade |
+| 2026-04-27 | HIP-4 mainnet window pinned via Polymarket: Jun→Sep 2026 (85%→99%); testnet date corrected to 2026-03-11 | Replaces "TBD"; Polymarket data-layer work timed to be ready by mid-June |
 
 ## Open questions
 

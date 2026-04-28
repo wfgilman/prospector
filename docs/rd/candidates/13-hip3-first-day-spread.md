@@ -3,7 +3,7 @@ id: 13
 name: HIP-3 first-day-after-auction spread
 status: ideation
 verdict: pending
-last-update: 2026-04-25
+last-update: 2026-04-27
 related-components: []
 ---
 
@@ -28,8 +28,9 @@ liquidity. Pre-competitive territory because few solo operators stake
 500K HYPE just to hunt these spreads.
 
 **Why-now:** HIP-3 launched 2025-10-13. By January 2026, builder-deployed
-markets generated > $790M in open interest. Throughput is real and
-growing.
+markets generated > $790M in open interest; by 2026-03-24, **$1.43B OI
+and >35% of all Hyperliquid volume**. Throughput is real and growing —
+the spread thesis has live volume backing it.
 
 **Axiomatic fit:**
 - *Combinations* — IPO-pop equity arb (mature) + crypto perp launch
@@ -65,6 +66,7 @@ growing.
 |---|---|---|
 | 2026-04-25 | Surfaced as T11 in fresh-eyes review (Tier 3) | Pre-competitive timing; throughput growing |
 | 2026-04-25 | Tier 3 — not urgent, novel | Worth monitoring but not blocking other work |
+| 2026-04-27 | HIP-3 OI/volume-share fact added ($1.43B / >35% by 2026-03-24) | Throughput backing strengthens the trade; still Tier 3 priority |
 
 ## Open questions
 

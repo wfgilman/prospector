@@ -3,7 +3,7 @@ id: 01
 name: PM Underwriting · Lottery
 status: paper-portfolio
 verdict: pending
-last-update: 2026-04-25
+last-update: 2026-04-27
 related-components:
   - calibration-curves
   - equal-sigma-sizing
@@ -18,11 +18,16 @@ related-components:
 ## Status snapshot
 
 - **Stage:** paper-portfolio (live since 2026-04-20; relaunched on equal-σ 2026-04-21)
-- **Verdict:** pending — 5 days of live data; first CLV reading shows
-  open-book median CLV −2.5pp, beat-line 24%. Within expected variance
-  for a 9:1 lottery payoff at N=80.
-- **Next move:** Continue paper accrual; CLV delta check ~Monday (T+48h
-  from 2026-04-25 baseline); 30-day Sharpe assessment around 2026-05-20.
+- **Verdict:** pending — 7 days of live data. T+72h CLV delta (2026-04-27,
+  n=67): open-book median CLV holds at −2.5pp / beat-line 24% (unchanged
+  vs. first-run); `corr(edge_pp, clv_pp)` decayed +0.144 → +0.056. Open
+  signal is stable, not improving; scanner-edge correlation is drifting
+  toward noise.
+- **Next move:** Continue paper accrual to the 30-day window
+  (~2026-05-20). If `corr(edge_pp, clv_pp)` stays sub-0.1 as N grows,
+  promote MVT rolling-threshold ([component](../../components/mvt-rolling-threshold.md))
+  from designed → implemented as the direct response to a persistent
+  negative-open-CLV regime.
 
 ## Ideation
 
@@ -256,6 +261,20 @@ The market is moving against most entries within the holding window. This
 is what motivates the [MVT rolling-threshold](../../components/mvt-rolling-threshold.md)
 component design (T2 from fresh-eyes review).
 
+**T+72h delta read (2026-04-27, n=67 scored / 144 positions):**
+- Open-book median CLV: −2.5pp (unchanged); beat-line 24% (unchanged)
+- Aggregate median −0.50pp / mean +2.19pp / σ 18.44pp; beat-line 22.4%
+- Closed subset (n=42): median +0.00pp, mean +3.64pp — outcome-driven, a
+  few 95-100¢ bin wins driving mean
+- `corr(edge_pp, clv_pp)`: **+0.056** (down from +0.144)
+- 85-90¢ bin still worst (22.9% beat, median −6.50pp)
+
+Open-subset signal is stable at first-run levels — the negative-CLV
+regime is persistent, not transient. The decay in scanner-edge
+correlation is the more notable shift: still inside noise at this N, but
+trending the wrong way against the Phase-4 gate condition that the
+scanner be selecting edges that survive the holding window.
+
 ### Expiry screen + shadow ledger (2026-04-23)
 
 Markets resolving > 28 days out get rejected and logged. See
@@ -282,6 +301,7 @@ Not reached. Phase 4 gated on:
 | 2026-04-23 | Expiry screen + shadow ledger added | Long-dated markets crowd out validation |
 | 2026-04-24 | CLV instrumentation shipped | Faster edge-validation signal than realized P&L |
 | 2026-04-25 | First CLV read shows median −2.5pp on open book | Within expected variance; not yet decisive |
+| 2026-04-27 | T+72h CLV delta: open-book holds −2.5pp / 24%; edge↔CLV corr decayed +0.144 → +0.056 (n=67) | Open-CLV regime is persistent. Scanner-edge correlation drift is noise at this N but is the metric to watch against the Phase-4 gate; if sub-0.1 persists, MVT rolling-threshold is the next implementation move |
 
 ## Pointers
 

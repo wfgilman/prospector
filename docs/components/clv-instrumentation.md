@@ -111,8 +111,20 @@ Open-book median CLV  −2.5pp     beat-line  24%
 edge_pp / clv_pp corr +0.144     n_scoreable 28
 ```
 
-The market is moving against most entries within the holding window. The
-scanner's `edge_pp` is at best a noisy CLV proxy.
+T+72h delta read (2026-04-27):
+
+```
+Open-book median CLV  −2.5pp     beat-line  24%   (unchanged)
+Aggregate median      −0.50pp    beat-line  22.4%
+Closed subset         median +0.00pp / mean +3.64pp (n=42)
+edge_pp / clv_pp corr +0.056     n_scoreable 67
+85-90¢ bin worst      median −6.50pp / 22.9% beat
+```
+
+The open-subset CLV regime is persistent, not transient. The
+scanner-edge correlation is decaying toward noise (+0.144 → +0.056); at
+this N still inside variance, but it is the metric to track against the
+Phase-4 gate. The scanner's `edge_pp` is at best a noisy CLV proxy.
 
 ---
 
@@ -146,3 +158,4 @@ positions.
 | 2026-04-24 | Snapshot capture wired into monitor (not a separate cron) | Piggybacks on the monitor's per-position fetch; no new daemon, no new API quota |
 | 2026-04-24 | Trade-tree fallback for tickers with sparse coverage | First-pass scoring reads any available source |
 | 2026-04-25 | Doc consolidated into components/ | Was inline in compute_clv.py docstring + fresh-eyes-review doc |
+| 2026-04-27 | T+72h delta read added (n=67) | Open-subset CLV regime stable at first-run levels; scanner edge↔CLV correlation decaying toward noise — promotes the MVT rolling-threshold component as the natural next implementation if the trend persists |

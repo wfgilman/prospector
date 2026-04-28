@@ -9,7 +9,7 @@ For stage definitions and verdict criteria, see
 
 | ID | Candidate | Stage | Verdict | Last update | Next move |
 |---|---|---|---|---|---|
-| 01 | [PM Underwriting · Lottery](candidates/01-pm-underwriting-lottery.md) | paper-portfolio | pending | 2026-04-25 | Continue paper accrual; CLV delta check ~Monday |
+| 01 | [PM Underwriting · Lottery](candidates/01-pm-underwriting-lottery.md) | paper-portfolio | pending | 2026-04-27 | Continue paper accrual to ~2026-05-20; if `corr(edge_pp, clv_pp)` stays sub-0.1, implement MVT rolling-threshold |
 | 04 | [PM Underwriting · Insurance](candidates/04-pm-underwriting-insurance.md) | paper-portfolio | pending | 2026-04-25 | Daemon loaded; first tick ~07:55 PT 2026-04-25; assess after 30 days |
 | 15 | [Elder templates + Bayesian optimization](candidates/15-elder-templates-bayesian.md) | backtest | pending | 2026-04-25 | Implement `scripts/elder_bayesian_search.py` (skopt GP + EI); run pre-registered Bayesian-vs-random comparison + walk-forward |
 

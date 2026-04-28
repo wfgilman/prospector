@@ -34,7 +34,14 @@ from rich.table import Table
 
 from prospector.harness.engine import run_backtest
 from prospector.harness.walk_forward import run_walk_forward
-from prospector.templates import false_breakout, triple_screen
+from prospector.templates import (
+    channel_fade,
+    ema_divergence,
+    false_breakout,
+    impulse_system,
+    kangaroo_tail,
+    triple_screen,
+)
 from prospector.templates.base import Signal
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -51,15 +58,23 @@ class TopConfig:
     n_trades: int
 
 
-def load_top_configs(db_path: Path, top_n: int) -> list[TopConfig]:
-    """Read the top-N scored configs from a ledger DB."""
+def load_top_configs(db_path: Path, top_n: int, template: str | None = None) -> list[TopConfig]:
+    """Read the top-N scored configs from a ledger DB. Optional template filter."""
     con = sqlite3.connect(db_path)
-    rows = con.execute(
-        "SELECT run_id, template, config_json, securities_json, score, n_trades "
-        "FROM runs WHERE validation_status = 'valid' AND backtest_status = 'scored' "
-        "ORDER BY score DESC LIMIT ?",
-        (top_n,),
-    ).fetchall()
+    if template is None:
+        rows = con.execute(
+            "SELECT run_id, template, config_json, securities_json, score, n_trades "
+            "FROM runs WHERE validation_status = 'valid' AND backtest_status = 'scored' "
+            "ORDER BY score DESC LIMIT ?",
+            (top_n,),
+        ).fetchall()
+    else:
+        rows = con.execute(
+            "SELECT run_id, template, config_json, securities_json, score, n_trades "
+            "FROM runs WHERE validation_status = 'valid' AND backtest_status = 'scored' "
+            "AND template = ? ORDER BY score DESC LIMIT ?",
+            (template, top_n),
+        ).fetchall()
     con.close()
 
     configs = []
@@ -87,11 +102,20 @@ def _load_ohlcv(coin: str, tf: str) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
+_SINGLE_TF_TEMPLATES = {
+    "false_breakout": false_breakout,
+    "impulse_system": impulse_system,
+    "channel_fade": channel_fade,
+    "kangaroo_tail": kangaroo_tail,
+    "ema_divergence": ema_divergence,
+}
+
+
 def _generate_signals(template: str, params: dict, coin: str) -> tuple[list[Signal], pd.DataFrame]:
     """Return (signals, backtest_df). backtest_df is the frame fold splitting uses."""
-    if template == "false_breakout":
+    if template in _SINGLE_TF_TEMPLATES:
         df = _load_ohlcv(coin, params["timeframe"])
-        return false_breakout.run(df, params), df
+        return _SINGLE_TF_TEMPLATES[template].run(df, params), df
     if template == "triple_screen":
         df_long = _load_ohlcv(coin, params["long_tf"])
         df_short = _load_ohlcv(coin, params["short_tf"])
@@ -248,13 +272,21 @@ def main() -> None:
     parser.add_argument("--db", type=Path, default=_REPO_ROOT / "data" / "prospector_oracle.db")
     parser.add_argument("--top", type=int, default=10)
     parser.add_argument("--folds", type=int, default=5)
+    parser.add_argument(
+        "--template", type=str, default=None,
+        help="Filter to one template; otherwise the global top across templates is used",
+    )
     args = parser.parse_args()
 
     console = Console()
     console.print("[bold green]Walk-forward validation[/bold green]")
-    console.print(f"DB: [cyan]{args.db}[/cyan]  top={args.top}  folds={args.folds}")
+    tmpl_label = args.template if args.template else "(all)"
+    console.print(
+        f"DB: [cyan]{args.db}[/cyan]  template=[cyan]{tmpl_label}[/cyan]  "
+        f"top={args.top}  folds={args.folds}"
+    )
 
-    configs = load_top_configs(args.db, args.top)
+    configs = load_top_configs(args.db, args.top, template=args.template)
     if not configs:
         console.print("[red]No scored configs found in DB.[/red]")
         return

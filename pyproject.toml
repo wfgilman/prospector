@@ -28,6 +28,10 @@ dashboard = [
     "streamlit>=1.36",
     "altair>=5.3",
 ]
+research = [
+    "scikit-optimize>=0.10",
+    "scikit-learn>=1.4",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

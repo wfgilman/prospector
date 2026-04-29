@@ -16,9 +16,15 @@ related-components:
 
 ## Status snapshot
 
-- **Stage:** paper-portfolio (daemon loaded 2026-04-25; first tick fires ~07:55 PT 2026-04-25)
-- **Verdict:** pending — too new for empirical assessment
-- **Next move:** Wait 30 days for paper signal; assess against pre-committed kill criteria around 2026-05-25.
+- **Stage:** paper-portfolio (relaunched 2026-04-29 with time-to-close gate)
+- **Verdict:** pending — first 4 days (2026-04-25 → 2026-04-29) showed
+  41 closed positions, 12 wins (29%), -$111 net. Same diagnostic as
+  candidate 01: stratified by time-to-close, the [6,24)h cell has 6/13
+  wins (46%, +$35) — matches what the calibration was fit on. Other
+  buckets are lossy.
+- **Next move:** Accrue 14-30 days under the new gate. Same pass
+  criterion as candidate 01: observed win rate within 5pp of
+  calibration's prediction.
 
 ## Ideation
 
@@ -159,6 +165,7 @@ Not reached. Phase 4 gated on:
 | 2026-04-25 | `min_edge_pp = 3` (vs. lottery's 5) | Mid-bin edges are smaller per Phase 1 results; will tune from realized data |
 | 2026-04-25 | Daemon loaded; first tick scheduled | Plist installed via launchctl bootstrap; awaiting 15-min interval |
 | 2026-04-25 | Dashboard wired with Compare tab | Side-by-side stat cards + overlaid P&L chart + KPI delta table |
+| 2026-04-29 | Stop + restart with time-to-close window gate | Same diagnostic as #01: calibration mid-life-conditioning bias caused systematic miss outside [6,24)h-to-close. After 41 closed (12W/29L, -$111), stratification showed [6,24)h cell at 46% win rate (+$35), other buckets lossy. Existing DB archived; daemon reloaded with `min_hours_to_close=6, max_hours_to_close=24`. |
 
 ## What this validates
 

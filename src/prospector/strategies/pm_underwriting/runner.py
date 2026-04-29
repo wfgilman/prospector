@@ -43,11 +43,20 @@ class RunnerConfig:
     categories: tuple[str, ...] | None = ("sports", "crypto")
     orderbook_depth: int = 1
     max_candidates_per_tick: int = 200
-    # Paper-trade validation horizon: markets resolving more than this many
-    # days out don't return signal in time to validate the strategy. Rejected
-    # candidates are written to the shadow ledger so we can reconstruct the
-    # counterfactual portfolio (what if we didn't screen) post-hoc.
-    max_days_to_close: int = 28
+    # Time-to-close window. The calibration store is built from PIT prices
+    # sampled at each market's mid-life — so its predictions are *implicitly*
+    # conditioned on a "mid-life" state. Entering markets at end-of-life
+    # (e.g. NBA player props at 0.99 with 30min to tipoff) samples a
+    # different state distribution where the calibration's edge does not
+    # hold. Empirical evidence in the 2026-04-21 → 2026-04-29 paper window:
+    # entries with <6h to close had a ~2.6% win rate vs. calibration's
+    # predicted ~13%; entries at [6,24)h matched calibration. So the
+    # default window matches the regime the calibration was fit on.
+    # Rejections write to the shadow ledger for counterfactual replay.
+    # See `docs/rd/candidates/01-pm-underwriting-lottery.md` decision log
+    # 2026-04-29.
+    min_hours_to_close: float | None = 6.0
+    max_hours_to_close: float | None = 24.0
     # Where shadow rejections are written. Usually the paper-portfolio root.
     shadow_ledger_root: Path | None = None
     # Entry-price band — used to scope a book to a slice of the calibration
@@ -66,7 +75,7 @@ class TickReport:
     candidates_seen: int
     entered: int
     rejected: int
-    shadow_rejected: int         # rejected on max_days_to_close (logged to shadow ledger)
+    shadow_rejected: int         # rejected on time-to-close window (logged to shadow ledger)
     tick_time: datetime
 
 
@@ -129,9 +138,12 @@ def run_once(
         sized.append((candidate, entry.sigma))
     sized.sort(key=lambda cs: cs[0].edge_pp / cs[1] if cs[1] > 0 else 0.0, reverse=True)
 
+    min_close_time = None
+    if config.min_hours_to_close is not None:
+        min_close_time = now + timedelta(hours=config.min_hours_to_close)
     max_close_time = None
-    if config.max_days_to_close is not None:
-        max_close_time = now + timedelta(days=config.max_days_to_close)
+    if config.max_hours_to_close is not None:
+        max_close_time = now + timedelta(hours=config.max_hours_to_close)
 
     entered = rejected = shadow_rejected = 0
     shadow_rows: list[ShadowRejection] = []
@@ -149,14 +161,24 @@ def run_once(
         ):
             continue
 
-        # Structural expiry screen: reject markets resolving past the
-        # paper-trade validation horizon, but record full metadata so a
-        # downstream shadow-portfolio reconstruction can replay them.
+        # Structural time-to-close window. Reject markets outside
+        # [min_hours_to_close, max_hours_to_close] but log to shadow
+        # ledger so we can replay counterfactuals (e.g. did adding
+        # the late-life cutoff actually help?).
+        out_of_window_reason: str | None = None
         if (
+            min_close_time is not None
+            and candidate.market.close_time is not None
+            and candidate.market.close_time < min_close_time
+        ):
+            out_of_window_reason = f"ttc_lt_{config.min_hours_to_close:g}h"
+        elif (
             max_close_time is not None
             and candidate.market.close_time is not None
             and candidate.market.close_time > max_close_time
         ):
+            out_of_window_reason = f"ttc_gt_{config.max_hours_to_close:g}h"
+        if out_of_window_reason is not None:
             would_be_risk = portfolio.size_position(sigma_i=sigma_i)
             shadow_rows.append(ShadowRejection(
                 ticker=candidate.market.ticker,
@@ -170,15 +192,15 @@ def run_once(
                 risk_budget=would_be_risk,
                 close_time=candidate.market.close_time,
                 entry_time=now,
-                reject_reason=f"expiry_gt_{config.max_days_to_close}d",
+                reject_reason=out_of_window_reason,
             ))
             shadow_rejected += 1
             logger.debug(
-                "SHADOW %s close=%s edge=%.2fpp (> %dd horizon)",
+                "SHADOW %s close=%s edge=%.2fpp (%s)",
                 candidate.market.ticker,
                 candidate.market.close_time,
                 candidate.edge_pp,
-                config.max_days_to_close,
+                out_of_window_reason,
             )
             continue
 

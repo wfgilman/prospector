@@ -56,13 +56,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--max-bin-frac", type=float, default=0.15)
     p.add_argument("--min-edge-pp", type=float, default=5.0)
     p.add_argument(
-        "--max-days-to-close",
-        type=int,
-        default=28,
+        "--min-hours-to-close",
+        type=float,
+        default=6.0,
         help=(
-            "Reject markets resolving more than this many days out. Their "
-            "metadata is logged to the shadow ledger for counterfactual "
-            "replay. 0 to disable."
+            "Reject markets resolving sooner than this many hours out. The "
+            "calibration is fit on PIT prices sampled at each market's "
+            "mid-life, so its predictions are implicitly conditioned on a "
+            "mid-life state. End-of-life entries (e.g. NBA props at 0.99 "
+            "with 30min to tipoff) sample a different distribution where "
+            "the calibration's edge does not hold. Set to 0 to disable."
+        ),
+    )
+    p.add_argument(
+        "--max-hours-to-close",
+        type=float,
+        default=24.0,
+        help=(
+            "Reject markets resolving later than this many hours out. "
+            "Together with --min-hours-to-close, defines the time-to-close "
+            "window aligned with the calibration's PIT distribution. Set "
+            "to 0 to disable."
         ),
     )
     p.add_argument(
@@ -111,7 +125,8 @@ def main(argv: list[str] | None = None) -> int:
     runner_cfg = RunnerConfig(
         min_edge_pp=args.min_edge_pp,
         categories=categories,
-        max_days_to_close=args.max_days_to_close or None,
+        min_hours_to_close=args.min_hours_to_close or None,
+        max_hours_to_close=args.max_hours_to_close or None,
         shadow_ledger_root=shadow_root,
         entry_price_min=args.entry_price_min,
         entry_price_max=args.entry_price_max,

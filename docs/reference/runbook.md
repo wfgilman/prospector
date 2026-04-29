@@ -71,6 +71,14 @@ python scripts/paper_trade.py --once \                       # insurance book
     --entry-price-min 0.55 --entry-price-max 0.75 --min-edge-pp 3.0
 ```
 
+Both PM books default to a 6-24h time-to-close window
+(`--min-hours-to-close=6 --max-hours-to-close=24`); markets outside
+this window are written to the shadow ledger as `ttc_lt_6h` /
+`ttc_gt_24h` rather than entered. The window aligns the daemon with
+the calibration's PIT-mid-life sampling distribution. See
+[`../components/calibration-curves.md`](../components/calibration-curves.md)
+"Implicit mid-life state-conditioning."
+
 ### Foreground daemon
 
 ```bash

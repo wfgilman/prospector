@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -40,6 +40,10 @@ class FakeClient:
 
 
 def _mkt(ticker: str, event_ticker: str = "KXNFL-2026", status: str = "active") -> Market:
+    # Canonical close_time = 12h after the canonical test "now" of
+    # 2026-04-20 10:00 — sits inside the default time-to-close window
+    # (6-24h) so most tests don't need to override it. Long-dated /
+    # short-dated tests override via _mkt_with_close.
     return Market(
         ticker=ticker,
         event_ticker=event_ticker,
@@ -49,8 +53,8 @@ def _mkt(ticker: str, event_ticker: str = "KXNFL-2026", status: str = "active") 
         no_sub_title="",
         status=status,
         result="",
-        open_time=datetime(2026, 4, 1, tzinfo=timezone.utc),
-        close_time=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        open_time=datetime(2026, 4, 20, 4, 0, tzinfo=timezone.utc),
+        close_time=datetime(2026, 4, 20, 22, 0, tzinfo=timezone.utc),
         expiration_time=None,
         yes_bid=0.50,
         yes_ask=None,
@@ -183,8 +187,9 @@ def test_run_once_sorts_by_edge_desc(portfolio, calibration, sigma_table):
         max_positions_per_subseries=10,
         max_positions_per_series=99,
     )
+    now = datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc)
     with PaperPortfolio(portfolio.db_path.parent / "p2.db", cfg) as port:
-        report = run_once(client, port, calibration, sigma_table)
+        report = run_once(client, port, calibration, sigma_table, now=now)
         assert report.entered == 1
         open_tickers = [p.ticker for p in port.open_positions()]
         # LOW's entry (0.84) is further above calibration (0.75) than HIGH's (0.82),
@@ -213,7 +218,8 @@ def test_run_once_resolves_and_enters_same_tick(portfolio, calibration, sigma_ta
     markets[0] = Market(**{**markets[0].__dict__, "result": "no"})
     obs = {"NEW": _ob(yes=[(0.82, 500)], no=[(0.17, 500)])}
     client = FakeClient(markets, obs)
-    report = run_once(client, portfolio, calibration, sigma_table)
+    now = datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc)
+    report = run_once(client, portfolio, calibration, sigma_table, now=now)
     assert report.monitor.resolved == 1
     assert report.entered == 1
     # NAV bumped by the win
@@ -255,8 +261,9 @@ def test_run_once_respects_diversity_caps_by_default(tmp_path, calibration, sigm
     ]
     obs = {m.ticker: _ob(yes=[(0.82, 500)], no=[(0.17, 500)]) for m in markets}
     client = FakeClient(markets, obs)
+    now = datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc)
     with PaperPortfolio(tmp_path / "strict.db", cfg) as p:
-        report = run_once(client, p, calibration, sigma_table)
+        report = run_once(client, p, calibration, sigma_table, now=now)
         assert report.entered == 1
 
 
@@ -267,52 +274,58 @@ def _mkt_with_close(ticker: str, close_time: datetime) -> Market:
     return Market(**{**m.__dict__, "close_time": close_time})
 
 
-def test_expiry_screen_rejects_long_dated_markets(
+def test_time_to_close_window_rejects_outside_band(
     tmp_path, portfolio, calibration, sigma_table
 ):
-    """Markets resolving more than max_days_to_close days out get shadow-
-    rejected instead of entered; their metadata lands in the shadow
-    parquet for counterfactual replay."""
+    """Markets outside [min_hours_to_close, max_hours_to_close] get shadow-
+    rejected instead of entered; their metadata lands in the shadow parquet
+    for counterfactual replay. Window default is 6-24h, mirroring the PIT
+    distribution the calibration was fit on."""
     now = datetime(2026, 4, 23, 10, 0, tzinfo=timezone.utc)
-    long_dated_close = datetime(2027, 3, 1, tzinfo=timezone.utc)   # 10+ months out
-    short_dated_close = datetime(2026, 5, 1, tzinfo=timezone.utc)  # 8 days out
+    too_soon_close = now + timedelta(hours=2)        # < 6h
+    in_window_close = now + timedelta(hours=12)      # in [6, 24]
+    too_late_close = now + timedelta(days=10)        # > 24h
 
     markets = [
-        _mkt_with_close("LONG", long_dated_close),
-        _mkt_with_close("SHORT", short_dated_close),
+        _mkt_with_close("TOOSOON", too_soon_close),
+        _mkt_with_close("INWIN", in_window_close),
+        _mkt_with_close("TOOLATE", too_late_close),
     ]
     obs = {m.ticker: _ob(yes=[(0.82, 500)], no=[(0.17, 500)]) for m in markets}
     client = FakeClient(markets, obs)
 
     shadow_root = tmp_path / "shadow_root"
-    config = RunnerConfig(max_days_to_close=28, shadow_ledger_root=shadow_root)
+    config = RunnerConfig(
+        min_hours_to_close=6.0,
+        max_hours_to_close=24.0,
+        shadow_ledger_root=shadow_root,
+    )
     report = run_once(client, portfolio, calibration, sigma_table, config, now=now)
 
-    assert report.entered == 1  # only SHORT
-    assert report.shadow_rejected == 1  # LONG
-    # LONG should be absent from the portfolio
-    assert not portfolio.has_open_position("LONG")
-    assert portfolio.has_open_position("SHORT")
+    assert report.entered == 1
+    assert report.shadow_rejected == 2
+    assert portfolio.has_open_position("INWIN")
+    assert not portfolio.has_open_position("TOOSOON")
+    assert not portfolio.has_open_position("TOOLATE")
 
-    # Shadow parquet should have exactly one row for LONG.
     shadow_path = shadow_root / "shadow" / "shadow_rejections.parquet"
-    assert shadow_path.exists()
     import pandas as pd
-    df = pd.read_parquet(shadow_path)
-    assert len(df) == 1
-    row = df.iloc[0]
-    assert row["ticker"] == "LONG"
-    assert row["reject_reason"] == "expiry_gt_28d"
-    assert row["edge_pp"] > 0
-    assert row["sigma_bin"] > 0
-    assert row["risk_budget"] > 0
+    df = pd.read_parquet(shadow_path).sort_values("ticker").reset_index(drop=True)
+    assert len(df) == 2
+    by_ticker = df.set_index("ticker")
+    assert by_ticker.loc["TOOLATE", "reject_reason"] == "ttc_gt_24h"
+    assert by_ticker.loc["TOOSOON", "reject_reason"] == "ttc_lt_6h"
+    for ticker in ("TOOSOON", "TOOLATE"):
+        assert by_ticker.loc[ticker, "edge_pp"] > 0
+        assert by_ticker.loc[ticker, "sigma_bin"] > 0
+        assert by_ticker.loc[ticker, "risk_budget"] > 0
 
 
-def test_expiry_screen_disabled_when_max_days_is_none(
+def test_time_to_close_window_disabled_when_bounds_are_none(
     tmp_path, portfolio, calibration, sigma_table
 ):
-    """max_days_to_close=None disables the screen entirely — long-dated
-    markets enter just like short-dated ones."""
+    """min_/max_hours_to_close = None disables the relevant edge of the
+    screen — letting long-dated and same-tick markets through."""
     now = datetime(2026, 4, 23, 10, 0, tzinfo=timezone.utc)
     long_dated_close = datetime(2027, 3, 1, tzinfo=timezone.utc)
     market = _mkt_with_close("LONG", long_dated_close)
@@ -320,7 +333,8 @@ def test_expiry_screen_disabled_when_max_days_is_none(
         [market], {"LONG": _ob(yes=[(0.82, 500)], no=[(0.17, 500)])}
     )
     config = RunnerConfig(
-        max_days_to_close=None,
+        min_hours_to_close=None,
+        max_hours_to_close=None,
         shadow_ledger_root=tmp_path,
     )
     report = run_once(client, portfolio, calibration, sigma_table, config, now=now)
@@ -329,7 +343,7 @@ def test_expiry_screen_disabled_when_max_days_is_none(
     assert portfolio.has_open_position("LONG")
 
 
-def test_expiry_screen_no_shadow_root_means_no_parquet(
+def test_time_to_close_screen_no_shadow_root_means_no_parquet(
     tmp_path, portfolio, calibration, sigma_table
 ):
     """If shadow_ledger_root is None, the screen still applies but nothing
@@ -340,7 +354,11 @@ def test_expiry_screen_no_shadow_root_means_no_parquet(
     client = FakeClient(
         [market], {"LONG": _ob(yes=[(0.82, 500)], no=[(0.17, 500)])}
     )
-    config = RunnerConfig(max_days_to_close=28, shadow_ledger_root=None)
+    config = RunnerConfig(
+        min_hours_to_close=6.0,
+        max_hours_to_close=24.0,
+        shadow_ledger_root=None,
+    )
     report = run_once(client, portfolio, calibration, sigma_table, config, now=now)
     assert report.shadow_rejected == 1
     assert not portfolio.has_open_position("LONG")
@@ -360,8 +378,9 @@ def test_entry_price_band_excludes_out_of_band_candidates(
         "HI2": _ob(yes=[(0.83, 500)], no=[(0.16, 500)]),
     }
     client = FakeClient(markets, obs)
+    now = datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc)
     config = RunnerConfig(entry_price_min=0.55, entry_price_max=0.75)
-    report = run_once(client, portfolio, calibration, sigma_table, config)
+    report = run_once(client, portfolio, calibration, sigma_table, config, now=now)
     assert report.entered == 0
     assert portfolio.state().open_positions == 0
 
@@ -379,8 +398,9 @@ def test_entry_price_band_includes_in_band_candidates(
         "HI2": _ob(yes=[(0.83, 500)], no=[(0.16, 500)]),
     }
     client = FakeClient(markets, obs)
+    now = datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc)
     config = RunnerConfig(entry_price_min=0.70, entry_price_max=0.95)
-    report = run_once(client, portfolio, calibration, sigma_table, config)
+    report = run_once(client, portfolio, calibration, sigma_table, config, now=now)
     assert report.entered == 2
 
 
@@ -390,5 +410,6 @@ def test_entry_price_band_default_is_full_range(portfolio, calibration, sigma_ta
     markets = [_mkt("T1", event_ticker="KXNFL-E1")]
     obs = {"T1": _ob(yes=[(0.82, 500)], no=[(0.17, 500)])}
     client = FakeClient(markets, obs)
-    report = run_once(client, portfolio, calibration, sigma_table, RunnerConfig())
+    now = datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc)
+    report = run_once(client, portfolio, calibration, sigma_table, RunnerConfig(), now=now)
     assert report.entered == 1

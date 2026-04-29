@@ -9,8 +9,8 @@ For stage definitions and verdict criteria, see
 
 | ID | Candidate | Stage | Verdict | Last update | Next move |
 |---|---|---|---|---|---|
-| 01 | [PM Underwriting · Lottery](candidates/01-pm-underwriting-lottery.md) | paper-portfolio | pending | 2026-04-27 | Continue paper accrual to ~2026-05-20; if `corr(edge_pp, clv_pp)` stays sub-0.1, implement MVT rolling-threshold |
-| 04 | [PM Underwriting · Insurance](candidates/04-pm-underwriting-insurance.md) | paper-portfolio | pending | 2026-04-25 | Daemon loaded; first tick ~07:55 PT 2026-04-25; assess after 30 days |
+| 01 | [PM Underwriting · Lottery](candidates/01-pm-underwriting-lottery.md) | paper-portfolio | pending | 2026-04-29 | First run falsified (4W/152L, -$335). Diagnosed as calibration-mid-life-conditioning bias; relaunched with `min_hours_to_close=6, max_hours_to_close=24` window matching the PIT distribution. Accrue 14-30 days. |
+| 04 | [PM Underwriting · Insurance](candidates/04-pm-underwriting-insurance.md) | paper-portfolio | pending | 2026-04-29 | Same diagnostic + remediation as #01 (12W/29L, -$111 in first run). Restarted on the time-to-close-gated config. |
 | 16 | [Triple-screen on mid-vol crypto perps](candidates/16-triple-screen-midvol-crypto.md) | paper-portfolio | pending | 2026-04-28 | Funding-aware replay PASSES all paper criteria (mean Sharpe 4.49 holdout, funding 0.6% of P&L). Launchd live (4h cadence); first tick 2026-04-28 — clean, no signal. Dashboard tab + Compare integration shipped. Accrue 30 days; T+30 eval ~2026-05-28 |
 
 ## Terminal — kept for reference

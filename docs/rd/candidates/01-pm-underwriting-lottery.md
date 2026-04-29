@@ -17,17 +17,21 @@ related-components:
 
 ## Status snapshot
 
-- **Stage:** paper-portfolio (live since 2026-04-20; relaunched on equal-σ 2026-04-21)
-- **Verdict:** pending — 7 days of live data. T+72h CLV delta (2026-04-27,
-  n=67): open-book median CLV holds at −2.5pp / beat-line 24% (unchanged
-  vs. first-run); `corr(edge_pp, clv_pp)` decayed +0.144 → +0.056. Open
-  signal is stable, not improving; scanner-edge correlation is drifting
-  toward noise.
-- **Next move:** Continue paper accrual to the 30-day window
-  (~2026-05-20). If `corr(edge_pp, clv_pp)` stays sub-0.1 as N grows,
-  promote MVT rolling-threshold ([component](../../components/mvt-rolling-threshold.md))
-  from designed → implemented as the direct response to a persistent
-  negative-open-CLV regime.
+- **Stage:** paper-portfolio (relaunched 2026-04-29 with time-to-close gate)
+- **Verdict:** pending — first 8 days (2026-04-21 → 2026-04-29) decisively
+  falsified the original config (4W/152L at 2.6% win rate vs. 13%
+  predicted; -$335 on $10k seed). Root cause diagnosed as
+  calibration-mid-life-conditioning bias (see 2026-04-29 decision-log
+  entry below). Restarted with `min_hours_to_close=6 / max_hours_to_close=24`
+  to align entries with the calibration's PIT distribution. Held-out
+  validation: in the original 156 trades, only the [6,24)h × [0.85,0.90)
+  cell was profitable (3 wins / 11 trades, +$61) and matches
+  calibration's predicted 19% win rate.
+- **Next move:** Accrue 14-30 days under the new gate. Pass criterion:
+  observed win rate within 5pp of calibration's prediction *for the cells
+  the daemon enters* (now constrained to 6-24h-to-close).
+  If still falsified, re-examine whether ANY sub-population shows
+  credible structural edge under proper state conditioning.
 
 ## Ideation
 
@@ -302,6 +306,8 @@ Not reached. Phase 4 gated on:
 | 2026-04-24 | CLV instrumentation shipped | Faster edge-validation signal than realized P&L |
 | 2026-04-25 | First CLV read shows median −2.5pp on open book | Within expected variance; not yet decisive |
 | 2026-04-27 | T+72h CLV delta: open-book holds −2.5pp / 24%; edge↔CLV corr decayed +0.144 → +0.056 (n=67) | Open-CLV regime is persistent. Scanner-edge correlation drift is noise at this N but is the metric to watch against the Phase-4 gate; if sub-0.1 persists, MVT rolling-threshold is the next implementation move |
+| 2026-04-29 | **Diagnostic: calibration mid-life-conditioning bias** | After 156 closed positions: 4 wins / 152 losses (2.6% win rate vs. calibration-predicted ~13%). Stratification reveals the root cause: the calibration is built from PIT prices sampled at each market's *mid-life*, so its predictions are implicitly conditioned on a mid-life state distribution. Our daemon was entering at *end-of-life* states (NBA player props at 0.99 with <1h to tipoff), where the favorite-bias the strategy is designed to fade does not exist (price is correct because the score is decisive). Stratifying observed win rate by time-to-close: <6h = 0.6% (lossy); [6,24)h = 18.8% (matches calibration's 13% prediction, +$45 net); 24h+ = 0% (lossy). Insurance book shows the same pattern. |
+| 2026-04-29 | **Stop + restart with time-to-close window gate** | Replaced `max_days_to_close=28` with `min_hours_to_close=6, max_hours_to_close=24`. Both rejections write to the shadow ledger (`ttc_lt_6h` / `ttc_gt_24h`) for replay. Existing portfolio DBs archived to `data/paper/archived/2026-04-29-precal-stratification/`. Both PM daemons reloaded with fresh DBs. The 156 prior closed trades stand as the held-out validation set that motivated the gate. |
 
 ## Pointers
 

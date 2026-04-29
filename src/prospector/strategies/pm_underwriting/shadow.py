@@ -48,7 +48,7 @@ class ShadowRejection:
     risk_budget: float               # what portfolio.size_position would have returned
     close_time: datetime | None
     entry_time: datetime
-    reject_reason: str               # e.g. "expiry_gt_28d"
+    reject_reason: str               # e.g. "ttc_lt_6h" / "ttc_gt_24h"
 
 
 def _path(root: Path) -> Path:

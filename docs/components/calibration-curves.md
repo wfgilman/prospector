@@ -185,6 +185,17 @@ Categorical segmentation matters because biases are category-specific
 - **PIT-as-entry assumption.** Backtests assume we can enter at PIT
   price. Real fills may be worse. CLV instrumentation is what measures
   this in production.
+- **Implicit mid-life state-conditioning.** PIT samples are drawn at
+  each market's mid-life. The calibration's `actual_rate` for a price
+  bin is therefore conditional on "the market sat at this price at
+  mid-life" — *not* "the market sits at this price right now,
+  regardless of life-cycle stage." A 0.99 NBA-prop snapshot 30 minutes
+  before tipoff is a different conditional distribution than a 0.99
+  pre-game snapshot. The paper-book daemon enforces this match via
+  `min_hours_to_close` / `max_hours_to_close` (default 6-24h) — see
+  [`01-pm-underwriting-lottery.md`](../rd/candidates/01-pm-underwriting-lottery.md)
+  2026-04-29 decision-log entry. A future refit could carry
+  `time_to_close` as an explicit covariate.
 - **Category-classification fragility.** New event-ticker prefixes fall
   into "other" until added. Sports growth forced multiple updates.
 - **Non-stationary at the tail.** 85-100¢ implied bins show 5-8pp
@@ -202,3 +213,4 @@ Categorical segmentation matters because biases are category-specific
 | 2026-04-21 | min_edge_pp raised from 3 → 5 (Lottery book) | Drops ~90% of low-Sharpe filler trades; concentrates capital in the high-Sharpe slice |
 | 2026-04-25 | Insurance book uses min_edge_pp=3 | Mid-bin edges are smaller; 3pp is appropriate for the 0.55-0.75 band |
 | 2026-04-25 | Doc consolidated into components/ | Was distributed across implementation/methodology.md, plan.md, deep-dive |
+| 2026-04-29 | Implicit mid-life state-conditioning surfaced as a tradeoff | 8 days of paper data showed the calibration's predictions don't survive end-of-life entries (NBA props at <1h to close). Daemon now enforces a [6h, 24h] time-to-close window aligned with the PIT distribution. Underlying calibration build unchanged; this is a runtime gate. |

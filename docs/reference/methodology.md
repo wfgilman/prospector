@@ -140,6 +140,31 @@ Three categories of false-positive findings that pre-registration prevents:
 3. **Reference-model noise.** Apparent edge is just the reference
    distribution being mis-specified. The null-shuffle benchmark forces
    the real signal to beat structurally-similar noise.
+4. **Implicit-state-conditioning bias.** A model fit on samples drawn
+   from one state distribution gets applied at inference time to a
+   different state distribution. The model looks correct on its
+   training data and looks credible on a held-out sample drawn from
+   the same distribution — but breaks at the application step where
+   the state has shifted.
+   The PM Underwriting calibration was fit on PIT prices sampled at
+   each market's mid-life (so its `actual_rate` for the [95,100) cell
+   means: "markets at 0.95-1.00 *at mid-life* resolve YES at 91.6%").
+   The daemon entered at end-of-life states (NBA props at 0.99 with
+   <1h to tipoff) where the actual resolution rate is closer to 99%+.
+   Same price bin, different *conditioning state* — and a 5x miss on
+   the predicted win rate in 8 days of paper data. The fix is to
+   either (a) apply the model only when the state matches the
+   training distribution, or (b) refit with the state condition
+   carried as a covariate. See
+   [`../rd/candidates/01-pm-underwriting-lottery.md`](../rd/candidates/01-pm-underwriting-lottery.md)
+   2026-04-29 decision-log entry.
+
+   **Generalization.** Anywhere a model is fit by sampling from market
+   *snapshots* (PIT prices, intra-bar quotes, mid-life ticks),
+   inference must enter at a sample drawn from the same distribution.
+   When inference time can drift outside that distribution
+   (e.g. running the daemon 24/7 over markets at all life-cycle
+   stages), gating to the training distribution is required.
 
 The PM Underwriting Phase 1 validation, the #4 Phase 1/3 narrative-spread
 work, and the #10 Phase 1 vol-surface work all hit some of these traps —
@@ -197,3 +222,4 @@ relaxation would have.
 | 2026-04-22 | Six non-negotiables codified | Generalizes the #10 pre-registration discipline as project-wide rule |
 | 2026-04-25 | Doc moved from `implementation/methodology.md` to `reference/methodology.md` | Reorg: this is project-wide, not PM Underwriting-specific |
 | 2026-04-25 | PM-specific empirical content moved to [`01-pm-underwriting-lottery.md`](../rd/candidates/01-pm-underwriting-lottery.md) | This doc is the discipline; the candidate doc is the data |
+| 2026-04-29 | Added "implicit-state-conditioning bias" as a fourth false-positive category | PM Underwriting paper-book miss (4W/152L vs. 13% predicted) traced to PIT-mid-life calibration applied to end-of-life entries. This is a *new* trap distinct from the original three; the discipline now flags state-distribution mismatch between fit and inference. |

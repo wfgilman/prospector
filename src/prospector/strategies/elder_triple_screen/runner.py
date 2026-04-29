@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -31,10 +31,15 @@ from prospector.strategies.elder_triple_screen.portfolio import (
 )
 from prospector.strategies.elder_triple_screen.signal import (
     LOCKED_PARAMS,
+    OHLCV_DIR,
     extract_signals,
     load_ohlcv_pair,
 )
 from prospector.templates.base import Direction
+
+# Each numeric is the bar duration of the matching pandas-style interval.
+# Only the values we actually use; expand if the locked TFs change.
+_INTERVAL_HOURS = {"1h": 1.0, "4h": 4.0, "1d": 24.0}
 
 log = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -60,6 +65,55 @@ def _refresh_ohlcv(coin: str, client: HyperliquidClient) -> None:
             download_pair(safe, interval, client=client)
         except Exception as exc:  # noqa: BLE001 — surface but don't kill the tick
             log.warning("OHLCV refresh failed for %s/%s: %s", safe, interval, exc)
+
+
+def _check_freshness(
+    universe: list[str],
+    short_tf: str,
+    now: datetime,
+    delisted_threshold: timedelta = timedelta(days=7),
+) -> tuple[list[str], list[str]]:
+    """Walk the cohort's short-TF parquets and classify each by freshness.
+
+    Returns ``(stale, very_stale)``: lists of cohort coins whose short-TF
+    last bar is older than expected. ``stale`` covers coins whose latest
+    bar is more than ``2 × short_tf`` old (one or more missed refreshes —
+    transient API failure or local-write error). ``very_stale`` covers
+    coins whose latest bar is older than ``delisted_threshold`` (likely
+    delisted; safe to prune from the cohort permanently).
+
+    Coins missing the parquet file entirely are reported as ``stale``.
+    """
+    short_tf_hours = _INTERVAL_HOURS.get(short_tf)
+    if short_tf_hours is None:
+        return [], []
+    stale_threshold = timedelta(hours=2 * short_tf_hours)
+
+    stale: list[str] = []
+    very_stale: list[str] = []
+    for coin in universe:
+        safe = _ohlcv_safe_name(coin)
+        path = OHLCV_DIR / safe / f"{short_tf}.parquet"
+        if not path.exists():
+            stale.append(coin)
+            continue
+        try:
+            df = pd.read_parquet(path, columns=["timestamp"])
+        except Exception:  # noqa: BLE001 — corrupt parquet → treat as stale
+            stale.append(coin)
+            continue
+        if df.empty:
+            stale.append(coin)
+            continue
+        last = pd.Timestamp(df["timestamp"].max())
+        if last.tzinfo is None:
+            last = last.tz_localize("UTC")
+        gap = pd.Timestamp(now) - last
+        if gap > delisted_threshold:
+            very_stale.append(coin)
+        elif gap > stale_threshold:
+            stale.append(coin)
+    return stale, very_stale
 
 
 def _try_open(
@@ -109,6 +163,26 @@ def run_once(portfolio: PaperPortfolio, config: RunnerConfig) -> dict:
     if config.refresh_data and client is not None:
         for coin in config.universe:
             _refresh_ohlcv(coin, client)
+
+    # Freshness audit — emit warnings *only* when something is off so
+    # healthy ticks stay quiet. Catches the failure mode where the
+    # refresh loop appears to succeed (HTTP 200) but no new bars land,
+    # or where a transient API failure leaves the cohort behind.
+    stale, very_stale = _check_freshness(
+        config.universe,
+        LOCKED_PARAMS["short_tf"],
+        datetime.now(timezone.utc),
+    )
+    if very_stale:
+        log.warning(
+            "OHLCV very stale (>7d) on %d coin(s) — likely delisted, prune from cohort: %s",
+            len(very_stale), very_stale,
+        )
+    if stale:
+        log.warning(
+            "OHLCV stale (>2x short_tf) on %d coin(s) — refresh likely failed: %s",
+            len(stale), stale,
+        )
 
     # Phase 1 — sweep stops/targets first so cash unlocks before re-entering.
     closed = sweep(portfolio)

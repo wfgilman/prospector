@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -40,23 +40,26 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class RunnerConfig:
     min_edge_pp: float = 5.0
-    categories: tuple[str, ...] | None = ("sports", "crypto")
+    # `None` = scan all categories (default). Set to e.g. ("sports",) to
+    # restrict. Wider scans collect more shadow-ledger data per tick at the
+    # cost of more API calls; the frac-of-life gate handles correctness.
+    categories: tuple[str, ...] | None = None
     orderbook_depth: int = 1
     max_candidates_per_tick: int = 200
-    # Time-to-close window. The calibration store is built from PIT prices
-    # sampled at each market's mid-life — so its predictions are *implicitly*
-    # conditioned on a "mid-life" state. Entering markets at end-of-life
-    # (e.g. NBA player props at 0.99 with 30min to tipoff) samples a
-    # different state distribution where the calibration's edge does not
-    # hold. Empirical evidence in the 2026-04-21 → 2026-04-29 paper window:
-    # entries with <6h to close had a ~2.6% win rate vs. calibration's
-    # predicted ~13%; entries at [6,24)h matched calibration. So the
-    # default window matches the regime the calibration was fit on.
-    # Rejections write to the shadow ledger for counterfactual replay.
+    # Frac-of-life entry window. The calibration store is built from PIT
+    # prices sampled at each market's mid-life (frac=0.5) with a 25%-of-life
+    # offset window — so its predictions are valid for entries in
+    # [0.25, 0.75]. But empirically (per 2026-04-29 across-category
+    # analysis) the longshot bias forms a *plateau* in [0.25, 0.55], then
+    # decays linearly as price discovery completes. Entering at frac > 0.55
+    # gives up real EV per trade — sports [95,100) drops from 12.8pp edge
+    # at frac=0.50 to 7.8pp at frac=0.75. Defaults match the plateau.
+    # Rejections write to the shadow ledger for counterfactual replay
+    # (reasons `frac_lt_<min>` / `frac_gt_<max>`).
     # See `docs/rd/candidates/01-pm-underwriting-lottery.md` decision log
-    # 2026-04-29.
-    min_hours_to_close: float | None = 6.0
-    max_hours_to_close: float | None = 24.0
+    # 2026-04-29 ("frac-of-life gate").
+    min_frac_of_life: float | None = 0.25
+    max_frac_of_life: float | None = 0.55
     # Where shadow rejections are written. Usually the paper-portfolio root.
     shadow_ledger_root: Path | None = None
     # Entry-price band — used to scope a book to a slice of the calibration
@@ -138,13 +141,6 @@ def run_once(
         sized.append((candidate, entry.sigma))
     sized.sort(key=lambda cs: cs[0].edge_pp / cs[1] if cs[1] > 0 else 0.0, reverse=True)
 
-    min_close_time = None
-    if config.min_hours_to_close is not None:
-        min_close_time = now + timedelta(hours=config.min_hours_to_close)
-    max_close_time = None
-    if config.max_hours_to_close is not None:
-        max_close_time = now + timedelta(hours=config.max_hours_to_close)
-
     entered = rejected = shadow_rejected = 0
     shadow_rows: list[ShadowRejection] = []
     for candidate, sigma_i in sized:
@@ -161,23 +157,30 @@ def run_once(
         ):
             continue
 
-        # Structural time-to-close window. Reject markets outside
-        # [min_hours_to_close, max_hours_to_close] but log to shadow
-        # ledger so we can replay counterfactuals (e.g. did adding
-        # the late-life cutoff actually help?).
+        # Frac-of-life gate: reject if the market is outside the calibration's
+        # training distribution. `frac = (now - open_time) / (close_time -
+        # open_time)`. Rejections write to shadow ledger so we can replay
+        # counterfactuals later (and check whether the gate was tight enough).
         out_of_window_reason: str | None = None
+        market = candidate.market
         if (
-            min_close_time is not None
-            and candidate.market.close_time is not None
-            and candidate.market.close_time < min_close_time
+            market.open_time is not None
+            and market.close_time is not None
+            and market.close_time > market.open_time
         ):
-            out_of_window_reason = f"ttc_lt_{config.min_hours_to_close:g}h"
-        elif (
-            max_close_time is not None
-            and candidate.market.close_time is not None
-            and candidate.market.close_time > max_close_time
-        ):
-            out_of_window_reason = f"ttc_gt_{config.max_hours_to_close:g}h"
+            life_span = (market.close_time - market.open_time).total_seconds()
+            elapsed = (now - market.open_time).total_seconds()
+            frac = elapsed / life_span
+            if (
+                config.min_frac_of_life is not None
+                and frac < config.min_frac_of_life
+            ):
+                out_of_window_reason = f"frac_lt_{config.min_frac_of_life:g}"
+            elif (
+                config.max_frac_of_life is not None
+                and frac > config.max_frac_of_life
+            ):
+                out_of_window_reason = f"frac_gt_{config.max_frac_of_life:g}"
         if out_of_window_reason is not None:
             would_be_risk = portfolio.size_position(sigma_i=sigma_i)
             shadow_rows.append(ShadowRejection(

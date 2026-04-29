@@ -186,16 +186,17 @@ Categorical segmentation matters because biases are category-specific
   price. Real fills may be worse. CLV instrumentation is what measures
   this in production.
 - **Implicit mid-life state-conditioning.** PIT samples are drawn at
-  each market's mid-life. The calibration's `actual_rate` for a price
-  bin is therefore conditional on "the market sat at this price at
-  mid-life" — *not* "the market sits at this price right now,
-  regardless of life-cycle stage." A 0.99 NBA-prop snapshot 30 minutes
-  before tipoff is a different conditional distribution than a 0.99
-  pre-game snapshot. The paper-book daemon enforces this match via
-  `min_hours_to_close` / `max_hours_to_close` (default 6-24h) — see
+  each market's mid-life (frac=0.5). The calibration's `actual_rate`
+  for a price bin is conditional on "the market sat at this price *at
+  mid-life*" — not "at any life-cycle stage." Per-fraction recomputation
+  shows a clean edge plateau in frac ∈ [0.25, 0.55], then linear decay
+  (sports [95,100): 78.5% → 81.0% → 84.7% → 92.2% at frac 0.30, 0.50,
+  0.70, 0.75). The paper-book daemon enforces this match via
+  `min_frac_of_life` / `max_frac_of_life` (default [0.25, 0.55]) using
+  `frac = (now − open_time) / (close_time − open_time)` — see
   [`01-pm-underwriting-lottery.md`](../rd/candidates/01-pm-underwriting-lottery.md)
-  2026-04-29 decision-log entry. A future refit could carry
-  `time_to_close` as an explicit covariate.
+  2026-04-29 decision-log entries. A future refit could carry `frac`
+  as an explicit covariate, eliminating the gate.
 - **Category-classification fragility.** New event-ticker prefixes fall
   into "other" until added. Sports growth forced multiple updates.
 - **Non-stationary at the tail.** 85-100¢ implied bins show 5-8pp
@@ -214,3 +215,4 @@ Categorical segmentation matters because biases are category-specific
 | 2026-04-25 | Insurance book uses min_edge_pp=3 | Mid-bin edges are smaller; 3pp is appropriate for the 0.55-0.75 band |
 | 2026-04-25 | Doc consolidated into components/ | Was distributed across implementation/methodology.md, plan.md, deep-dive |
 | 2026-04-29 | Implicit mid-life state-conditioning surfaced as a tradeoff | 8 days of paper data showed the calibration's predictions don't survive end-of-life entries (NBA props at <1h to close). Daemon now enforces a [6h, 24h] time-to-close window aligned with the PIT distribution. Underlying calibration build unchanged; this is a runtime gate. |
+| 2026-04-29 | Time-to-close gate replaced with frac-of-life gate | Time-to-close used Kalshi's *official* `close_time` — wrong feature for series-spanning prop markets where official close is weeks out but resolution fires within hours. 12h of paper data with 0 entries / 305 shadow rejections proved the bug. Replaced with `frac = (now − open_time) / (close_time − open_time)` ∈ [0.25, 0.55], which exactly matches the calibration's training distribution. Per-category analysis on 3.5M historical markets validates the [0.25, 0.55] window as the longshot-bias plateau. |

@@ -16,15 +16,16 @@ related-components:
 
 ## Status snapshot
 
-- **Stage:** paper-portfolio (relaunched 2026-04-29 with time-to-close gate)
-- **Verdict:** pending — first 4 days (2026-04-25 → 2026-04-29) showed
-  41 closed positions, 12 wins (29%), -$111 net. Same diagnostic as
-  candidate 01: stratified by time-to-close, the [6,24)h cell has 6/13
-  wins (46%, +$35) — matches what the calibration was fit on. Other
-  buckets are lossy.
-- **Next move:** Accrue 14-30 days under the new gate. Same pass
-  criterion as candidate 01: observed win rate within 5pp of
-  calibration's prediction.
+- **Stage:** paper-portfolio (relaunched 2026-04-29 with **frac-of-life gate**)
+- **Verdict:** pending — same diagnostic + remediation arc as #01. First
+  4 days (2026-04-25 → 2026-04-29) showed 41 closed, 12 wins (29%),
+  -$111 net. After diagnosing the calibration's PIT-mid-life conditioning
+  bias and confirming the edge plateau at frac ∈ [0.25, 0.55] across all
+  categories, the insurance book inherits the same gate. Same calibration,
+  same scanner, same runner — the only differences are price band
+  (`[0.55, 0.75]`) and edge floor (`3pp`).
+- **Next move:** Accrue 14-30 days. Pass criterion: observed win rate
+  within 5pp of calibration's prediction for the cells the daemon enters.
 
 ## Ideation
 
@@ -166,6 +167,7 @@ Not reached. Phase 4 gated on:
 | 2026-04-25 | Daemon loaded; first tick scheduled | Plist installed via launchctl bootstrap; awaiting 15-min interval |
 | 2026-04-25 | Dashboard wired with Compare tab | Side-by-side stat cards + overlaid P&L chart + KPI delta table |
 | 2026-04-29 | Stop + restart with time-to-close window gate | Same diagnostic as #01: calibration mid-life-conditioning bias caused systematic miss outside [6,24)h-to-close. After 41 closed (12W/29L, -$111), stratification showed [6,24)h cell at 46% win rate (+$35), other buckets lossy. Existing DB archived; daemon reloaded with `min_hours_to_close=6, max_hours_to_close=24`. |
+| 2026-04-29 | Time-to-close gate replaced with frac-of-life gate | See #01 entry of same date for the full diagnosis. Wrong-feature bug; corrected to `frac = (now - open_time) / (close_time - open_time)` with defaults [0.25, 0.55]. Also dropped categories filter. |
 
 ## What this validates
 

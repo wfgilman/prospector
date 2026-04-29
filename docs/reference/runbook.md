@@ -71,11 +71,15 @@ python scripts/paper_trade.py --once \                       # insurance book
     --entry-price-min 0.55 --entry-price-max 0.75 --min-edge-pp 3.0
 ```
 
-Both PM books default to a 6-24h time-to-close window
-(`--min-hours-to-close=6 --max-hours-to-close=24`); markets outside
-this window are written to the shadow ledger as `ttc_lt_6h` /
-`ttc_gt_24h` rather than entered. The window aligns the daemon with
-the calibration's PIT-mid-life sampling distribution. See
+Both PM books default to a frac-of-life window of
+`[--min-frac-of-life=0.25, --max-frac-of-life=0.55]`, where
+`frac = (now − open_time) / (close_time − open_time)`. Markets outside
+this window are written to the shadow ledger as `frac_lt_0.25` /
+`frac_gt_0.55` rather than entered. The window matches the
+calibration's PIT-mid-life sampling distribution and the empirically
+identified longshot-bias plateau. The default `--categories` is now
+*all* (no filter); the gate handles correctness, and wider scans
+collect richer shadow-ledger data. See
 [`../components/calibration-curves.md`](../components/calibration-curves.md)
 "Implicit mid-life state-conditioning."
 
@@ -228,3 +232,4 @@ in real exchange accounts, not local SQLite).
 |---|---|---|
 | 2026-04-25 | Runbook reorganized to track docs reorg | Pointers updated to new platform/ + components/ locations; obsolete sections removed |
 | 2026-04-28 | Elder triple-screen daemon section added | Candidate 16 advanced to paper-portfolio; new daemon, plist, log location, OHLCV-refresh-on-tick semantics that differ from the PM books |
+| 2026-04-29 | PM books switched from time-to-close gate to frac-of-life gate | Diagnosed feature mismatch: `close_time` is Kalshi's *official* expiry, not actual resolution. Replaced with `frac = (now − open_time)/(close_time − open_time)`, defaults [0.25, 0.55]. Categories filter dropped (gate handles correctness). |

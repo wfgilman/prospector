@@ -147,17 +147,27 @@ Three categories of false-positive findings that pre-registration prevents:
    the same distribution — but breaks at the application step where
    the state has shifted.
    The PM Underwriting calibration was fit on PIT prices sampled at
-   each market's mid-life (so its `actual_rate` for the [95,100) cell
-   means: "markets at 0.95-1.00 *at mid-life* resolve YES at 91.6%").
-   The daemon entered at end-of-life states (NBA props at 0.99 with
-   <1h to tipoff) where the actual resolution rate is closer to 99%+.
-   Same price bin, different *conditioning state* — and a 5x miss on
-   the predicted win rate in 8 days of paper data. The fix is to
-   either (a) apply the model only when the state matches the
-   training distribution, or (b) refit with the state condition
-   carried as a covariate. See
+   each market's mid-life. Per-fraction recomputation across all
+   categories shows the longshot bias forms a clean plateau in
+   frac ∈ [0.25, 0.55] then decays — sports [95,100) actual_rate goes
+   78.5% (frac=0.30) → 81.0% (0.50) → 84.7% (0.70) → 92.2% (0.75) →
+   93.7% (0.90). The daemon enters at any time, biasing the entry
+   distribution toward end-of-life states where the bias has decayed.
+   The fix: gate at inference time to the same state distribution the
+   model was fit on (`frac_of_life ∈ [0.25, 0.55]`), or refit with
+   the state covariate explicit. See
    [`../rd/candidates/01-pm-underwriting-lottery.md`](../rd/candidates/01-pm-underwriting-lottery.md)
-   2026-04-29 decision-log entry.
+   2026-04-29 decision-log entries.
+
+   **Sub-trap: feature mismatch.** The first attempt at the gate
+   filtered on `close_time − now` (time-to-close) — a *different*
+   feature than the diagnostic used. Kalshi's `close_time` is the
+   official market expiry, often weeks out for series-spanning
+   prop markets, regardless of when resolution actually fires.
+   100% of prior entries had `close_time > 24h` so the gate killed
+   every entry. Lesson: the feature the diagnostic used must be
+   exactly the feature the gate uses, or the gate is filtering
+   something else entirely.
 
    **Generalization.** Anywhere a model is fit by sampling from market
    *snapshots* (PIT prices, intra-bar quotes, mid-life ticks),
@@ -223,3 +233,4 @@ relaxation would have.
 | 2026-04-25 | Doc moved from `implementation/methodology.md` to `reference/methodology.md` | Reorg: this is project-wide, not PM Underwriting-specific |
 | 2026-04-25 | PM-specific empirical content moved to [`01-pm-underwriting-lottery.md`](../rd/candidates/01-pm-underwriting-lottery.md) | This doc is the discipline; the candidate doc is the data |
 | 2026-04-29 | Added "implicit-state-conditioning bias" as a fourth false-positive category | PM Underwriting paper-book miss (4W/152L vs. 13% predicted) traced to PIT-mid-life calibration applied to end-of-life entries. This is a *new* trap distinct from the original three; the discipline now flags state-distribution mismatch between fit and inference. |
+| 2026-04-29 | Added "feature mismatch" sub-trap | First attempt at gating used `close_time − now` (time-to-close), filtering on a *different* feature than the diagnostic used (`actual_resolution_time − entry_time`). 100% of entries failed the gate; 0 trades for 12h. Lesson formalized: gate feature == diagnostic feature, or the gate is meaningless. |

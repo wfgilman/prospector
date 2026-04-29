@@ -9,8 +9,8 @@ For stage definitions and verdict criteria, see
 
 | ID | Candidate | Stage | Verdict | Last update | Next move |
 |---|---|---|---|---|---|
-| 01 | [PM Underwriting · Lottery](candidates/01-pm-underwriting-lottery.md) | paper-portfolio | pending | 2026-04-29 | First run falsified (4W/152L, -$335). Diagnosed as calibration-mid-life-conditioning bias; relaunched with `min_hours_to_close=6, max_hours_to_close=24` window matching the PIT distribution. Accrue 14-30 days. |
-| 04 | [PM Underwriting · Insurance](candidates/04-pm-underwriting-insurance.md) | paper-portfolio | pending | 2026-04-29 | Same diagnostic + remediation as #01 (12W/29L, -$111 in first run). Restarted on the time-to-close-gated config. |
+| 01 | [PM Underwriting · Lottery](candidates/01-pm-underwriting-lottery.md) | paper-portfolio | pending | 2026-04-29 | First run falsified (4W/152L, -$335). Diagnosed as calibration-mid-life-conditioning bias; first remediation (`hours_to_close` gate) was wrong-feature; **shipped frac-of-life gate `min/max_frac_of_life=[0.25, 0.55]` and dropped categories filter**. Accrue 14-30 days. |
+| 04 | [PM Underwriting · Insurance](candidates/04-pm-underwriting-insurance.md) | paper-portfolio | pending | 2026-04-29 | Same diagnostic + remediation as #01. Both books now run on the frac-of-life gate. |
 | 16 | [Triple-screen on mid-vol crypto perps](candidates/16-triple-screen-midvol-crypto.md) | paper-portfolio | pending | 2026-04-28 | Funding-aware replay PASSES all paper criteria (mean Sharpe 4.49 holdout, funding 0.6% of P&L). Launchd live (4h cadence); first tick 2026-04-28 — clean, no signal. Dashboard tab + Compare integration shipped. Accrue 30 days; T+30 eval ~2026-05-28 |
 
 ## Terminal — kept for reference

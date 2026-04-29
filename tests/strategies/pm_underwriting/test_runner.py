@@ -274,94 +274,110 @@ def _mkt_with_close(ticker: str, close_time: datetime) -> Market:
     return Market(**{**m.__dict__, "close_time": close_time})
 
 
-def test_time_to_close_window_rejects_outside_band(
+def _mkt_with_lifespan(
+    ticker: str, open_time: datetime, close_time: datetime
+) -> Market:
+    """Build a market with a specific (open_time, close_time) pair so the
+    runner's frac-of-life computation has real values to work with."""
+    m = _mkt(ticker, event_ticker="KXNFL-E1")
+    return Market(**{**m.__dict__, "open_time": open_time, "close_time": close_time})
+
+
+def test_frac_of_life_window_rejects_outside_band(
     tmp_path, portfolio, calibration, sigma_table
 ):
-    """Markets outside [min_hours_to_close, max_hours_to_close] get shadow-
+    """Markets outside [min_frac_of_life, max_frac_of_life] get shadow-
     rejected instead of entered; their metadata lands in the shadow parquet
-    for counterfactual replay. Window default is 6-24h, mirroring the PIT
-    distribution the calibration was fit on."""
+    for counterfactual replay. Defaults [0.25, 0.55] match the calibration's
+    PIT-mid-life sampling distribution."""
     now = datetime(2026, 4, 23, 10, 0, tzinfo=timezone.utc)
-    too_soon_close = now + timedelta(hours=2)        # < 6h
-    in_window_close = now + timedelta(hours=12)      # in [6, 24]
-    too_late_close = now + timedelta(days=10)        # > 24h
+    # Lifespan = 100h, so frac for each ticker is precisely controllable.
+    early_open = now - timedelta(hours=10)
+    early_close = early_open + timedelta(hours=100)   # frac at now = 0.10
+    mid_open = now - timedelta(hours=40)
+    mid_close = mid_open + timedelta(hours=100)       # frac at now = 0.40
+    late_open = now - timedelta(hours=80)
+    late_close = late_open + timedelta(hours=100)     # frac at now = 0.80
 
     markets = [
-        _mkt_with_close("TOOSOON", too_soon_close),
-        _mkt_with_close("INWIN", in_window_close),
-        _mkt_with_close("TOOLATE", too_late_close),
+        _mkt_with_lifespan("EARLY", early_open, early_close),
+        _mkt_with_lifespan("MID", mid_open, mid_close),
+        _mkt_with_lifespan("LATE", late_open, late_close),
     ]
     obs = {m.ticker: _ob(yes=[(0.82, 500)], no=[(0.17, 500)]) for m in markets}
     client = FakeClient(markets, obs)
 
     shadow_root = tmp_path / "shadow_root"
     config = RunnerConfig(
-        min_hours_to_close=6.0,
-        max_hours_to_close=24.0,
+        min_frac_of_life=0.25,
+        max_frac_of_life=0.55,
         shadow_ledger_root=shadow_root,
     )
     report = run_once(client, portfolio, calibration, sigma_table, config, now=now)
 
     assert report.entered == 1
     assert report.shadow_rejected == 2
-    assert portfolio.has_open_position("INWIN")
-    assert not portfolio.has_open_position("TOOSOON")
-    assert not portfolio.has_open_position("TOOLATE")
+    assert portfolio.has_open_position("MID")
+    assert not portfolio.has_open_position("EARLY")
+    assert not portfolio.has_open_position("LATE")
 
     shadow_path = shadow_root / "shadow" / "shadow_rejections.parquet"
     import pandas as pd
     df = pd.read_parquet(shadow_path).sort_values("ticker").reset_index(drop=True)
     assert len(df) == 2
     by_ticker = df.set_index("ticker")
-    assert by_ticker.loc["TOOLATE", "reject_reason"] == "ttc_gt_24h"
-    assert by_ticker.loc["TOOSOON", "reject_reason"] == "ttc_lt_6h"
-    for ticker in ("TOOSOON", "TOOLATE"):
+    assert by_ticker.loc["EARLY", "reject_reason"] == "frac_lt_0.25"
+    assert by_ticker.loc["LATE", "reject_reason"] == "frac_gt_0.55"
+    for ticker in ("EARLY", "LATE"):
         assert by_ticker.loc[ticker, "edge_pp"] > 0
         assert by_ticker.loc[ticker, "sigma_bin"] > 0
         assert by_ticker.loc[ticker, "risk_budget"] > 0
 
 
-def test_time_to_close_window_disabled_when_bounds_are_none(
+def test_frac_of_life_window_disabled_when_bounds_are_none(
     tmp_path, portfolio, calibration, sigma_table
 ):
-    """min_/max_hours_to_close = None disables the relevant edge of the
-    screen — letting long-dated and same-tick markets through."""
+    """min_/max_frac_of_life = None disables the gate entirely — markets
+    enter regardless of life-stage. Useful for replay/backtest mode."""
     now = datetime(2026, 4, 23, 10, 0, tzinfo=timezone.utc)
-    long_dated_close = datetime(2027, 3, 1, tzinfo=timezone.utc)
-    market = _mkt_with_close("LONG", long_dated_close)
+    # frac at now = 0.95 (very late)
+    open_time = now - timedelta(hours=95)
+    close_time = open_time + timedelta(hours=100)
+    market = _mkt_with_lifespan("LATE", open_time, close_time)
     client = FakeClient(
-        [market], {"LONG": _ob(yes=[(0.82, 500)], no=[(0.17, 500)])}
+        [market], {"LATE": _ob(yes=[(0.82, 500)], no=[(0.17, 500)])}
     )
     config = RunnerConfig(
-        min_hours_to_close=None,
-        max_hours_to_close=None,
+        min_frac_of_life=None,
+        max_frac_of_life=None,
         shadow_ledger_root=tmp_path,
     )
     report = run_once(client, portfolio, calibration, sigma_table, config, now=now)
     assert report.entered == 1
     assert report.shadow_rejected == 0
-    assert portfolio.has_open_position("LONG")
+    assert portfolio.has_open_position("LATE")
 
 
-def test_time_to_close_screen_no_shadow_root_means_no_parquet(
+def test_frac_of_life_screen_no_shadow_root_means_no_parquet(
     tmp_path, portfolio, calibration, sigma_table
 ):
     """If shadow_ledger_root is None, the screen still applies but nothing
     is written to disk (useful for unit tests)."""
     now = datetime(2026, 4, 23, 10, 0, tzinfo=timezone.utc)
-    long_dated_close = datetime(2027, 3, 1, tzinfo=timezone.utc)
-    market = _mkt_with_close("LONG", long_dated_close)
+    open_time = now - timedelta(hours=95)
+    close_time = open_time + timedelta(hours=100)   # frac at now = 0.95
+    market = _mkt_with_lifespan("LATE", open_time, close_time)
     client = FakeClient(
-        [market], {"LONG": _ob(yes=[(0.82, 500)], no=[(0.17, 500)])}
+        [market], {"LATE": _ob(yes=[(0.82, 500)], no=[(0.17, 500)])}
     )
     config = RunnerConfig(
-        min_hours_to_close=6.0,
-        max_hours_to_close=24.0,
+        min_frac_of_life=0.25,
+        max_frac_of_life=0.55,
         shadow_ledger_root=None,
     )
     report = run_once(client, portfolio, calibration, sigma_table, config, now=now)
     assert report.shadow_rejected == 1
-    assert not portfolio.has_open_position("LONG")
+    assert not portfolio.has_open_position("LATE")
 
 
 def test_entry_price_band_excludes_out_of_band_candidates(

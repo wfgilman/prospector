@@ -56,34 +56,38 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--max-bin-frac", type=float, default=0.15)
     p.add_argument("--min-edge-pp", type=float, default=5.0)
     p.add_argument(
-        "--min-hours-to-close",
+        "--min-frac-of-life",
         type=float,
-        default=6.0,
+        default=0.25,
         help=(
-            "Reject markets resolving sooner than this many hours out. The "
-            "calibration is fit on PIT prices sampled at each market's "
-            "mid-life, so its predictions are implicitly conditioned on a "
-            "mid-life state. End-of-life entries (e.g. NBA props at 0.99 "
-            "with 30min to tipoff) sample a different distribution where "
-            "the calibration's edge does not hold. Set to 0 to disable."
+            "Reject markets where (now - open_time)/(close_time - open_time) "
+            "is below this fraction. The calibration is fit on PIT prices "
+            "at frac=0.5 with a 25%%-of-life offset window, and the "
+            "longshot bias plateaus in [0.25, 0.55] before decaying. "
+            "Set to 0 to disable."
         ),
     )
     p.add_argument(
-        "--max-hours-to-close",
+        "--max-frac-of-life",
         type=float,
-        default=24.0,
+        default=0.55,
         help=(
-            "Reject markets resolving later than this many hours out. "
-            "Together with --min-hours-to-close, defines the time-to-close "
-            "window aligned with the calibration's PIT distribution. Set "
-            "to 0 to disable."
+            "Reject markets past this fraction of life. Past 0.55, prices "
+            "rapidly converge to the resolved outcome (information "
+            "aggregation), eroding the calibration's claimed edge. "
+            "Set to 1 to disable."
         ),
     )
     p.add_argument(
         "--categories",
         nargs="*",
-        default=["sports", "crypto"],
-        help='Filter to these categories. Pass "all" to disable filtering.',
+        default=None,
+        help=(
+            'Filter to these categories (e.g. "sports crypto"). Default '
+            'is to scan all categories — the frac-of-life gate handles '
+            'correctness; non-tradeable categories drop out via the '
+            'edge floor naturally. Pass "all" or omit for all categories.'
+        ),
     )
     p.add_argument(
         "--entry-price-min",
@@ -119,14 +123,19 @@ def main(argv: list[str] | None = None) -> int:
     calibration = store.load_current()
     sigma_table = load_sigma_table(args.sigma_table)
 
-    categories = None if args.categories == ["all"] else tuple(args.categories)
+    if args.categories is None or args.categories == ["all"]:
+        categories = None
+    else:
+        categories = tuple(args.categories)
     # Shadow ledger lives next to the portfolio DB (parent of DB file).
     shadow_root = args.portfolio_db.parent
     runner_cfg = RunnerConfig(
         min_edge_pp=args.min_edge_pp,
         categories=categories,
-        min_hours_to_close=args.min_hours_to_close or None,
-        max_hours_to_close=args.max_hours_to_close or None,
+        min_frac_of_life=args.min_frac_of_life or None,
+        max_frac_of_life=(
+            args.max_frac_of_life if args.max_frac_of_life < 1 else None
+        ),
         shadow_ledger_root=shadow_root,
         entry_price_min=args.entry_price_min,
         entry_price_max=args.entry_price_max,

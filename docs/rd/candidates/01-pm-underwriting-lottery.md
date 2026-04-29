@@ -17,21 +17,24 @@ related-components:
 
 ## Status snapshot
 
-- **Stage:** paper-portfolio (relaunched 2026-04-29 with time-to-close gate)
+- **Stage:** paper-portfolio (relaunched 2026-04-29 with **frac-of-life gate**)
 - **Verdict:** pending — first 8 days (2026-04-21 → 2026-04-29) decisively
   falsified the original config (4W/152L at 2.6% win rate vs. 13%
-  predicted; -$335 on $10k seed). Root cause diagnosed as
-  calibration-mid-life-conditioning bias (see 2026-04-29 decision-log
-  entry below). Restarted with `min_hours_to_close=6 / max_hours_to_close=24`
-  to align entries with the calibration's PIT distribution. Held-out
-  validation: in the original 156 trades, only the [6,24)h × [0.85,0.90)
-  cell was profitable (3 wins / 11 trades, +$61) and matches
-  calibration's predicted 19% win rate.
-- **Next move:** Accrue 14-30 days under the new gate. Pass criterion:
-  observed win rate within 5pp of calibration's prediction *for the cells
-  the daemon enters* (now constrained to 6-24h-to-close).
-  If still falsified, re-examine whether ANY sub-population shows
-  credible structural edge under proper state conditioning.
+  predicted; -$335 on $10k seed). Root cause: calibration is built from
+  PIT prices at each market's mid-life (frac=0.5) but the daemon was
+  entering at end-of-life states (frac > 0.55) where the longshot bias
+  has decayed. Per-fraction analysis on 3M sports markets confirms a
+  clean *edge plateau* in [0.25, 0.55] followed by linear decay.
+  An initial fix (`min/max_hours_to_close`) was wrong-feature: Kalshi's
+  `close_time` is the *official* expiry, often days out for series-long
+  prop markets, while resolution happens at game end. The correct gate
+  is `frac = (now − open_time) / (close_time − open_time)`.
+- **Next move:** Accrue 14-30 days under `min_frac_of_life=0.25,
+  max_frac_of_life=0.55`. Pass criterion: observed win rate within 5pp
+  of calibration's prediction for the cells the daemon enters. If still
+  falsified after a few hundred entries, re-examine whether the
+  longshot-bias claim survives at fine-grained sub-cohorts (per-subseries,
+  per-volume-bin), or refit with frac as an explicit covariate.
 
 ## Ideation
 
@@ -308,6 +311,7 @@ Not reached. Phase 4 gated on:
 | 2026-04-27 | T+72h CLV delta: open-book holds −2.5pp / 24%; edge↔CLV corr decayed +0.144 → +0.056 (n=67) | Open-CLV regime is persistent. Scanner-edge correlation drift is noise at this N but is the metric to watch against the Phase-4 gate; if sub-0.1 persists, MVT rolling-threshold is the next implementation move |
 | 2026-04-29 | **Diagnostic: calibration mid-life-conditioning bias** | After 156 closed positions: 4 wins / 152 losses (2.6% win rate vs. calibration-predicted ~13%). Stratification reveals the root cause: the calibration is built from PIT prices sampled at each market's *mid-life*, so its predictions are implicitly conditioned on a mid-life state distribution. Our daemon was entering at *end-of-life* states (NBA player props at 0.99 with <1h to tipoff), where the favorite-bias the strategy is designed to fade does not exist (price is correct because the score is decisive). Stratifying observed win rate by time-to-close: <6h = 0.6% (lossy); [6,24)h = 18.8% (matches calibration's 13% prediction, +$45 net); 24h+ = 0% (lossy). Insurance book shows the same pattern. |
 | 2026-04-29 | **Stop + restart with time-to-close window gate** | Replaced `max_days_to_close=28` with `min_hours_to_close=6, max_hours_to_close=24`. Both rejections write to the shadow ledger (`ttc_lt_6h` / `ttc_gt_24h`) for replay. Existing portfolio DBs archived to `data/paper/archived/2026-04-29-precal-stratification/`. Both PM daemons reloaded with fresh DBs. The 156 prior closed trades stand as the held-out validation set that motivated the gate. |
+| 2026-04-29 | **Time-to-close gate was wrong feature; replaced with frac-of-life gate** | After 12h with 0 entries / 305 shadow rejections (all `ttc_gt_24h`), traced to a feature mismatch. The diagnostic stratified by *actual resolution latency* (close_time − entry_time, in seconds), but the gate filtered on Kalshi's *official* `close_time` (often weeks out for series-long prop markets). 100% of prior entries had official close > 24h regardless of when they resolved. The correct gate is `frac = (now − open_time) / (close_time − open_time)`, matching the calibration's PIT-mid-life sampling. Across-category analysis on 3.5M historical resolved markets confirms the longshot bias forms a plateau in frac ∈ [0.25, 0.55] (sports [95,100): 78.5% → 81.0% → 84.7% YES at frac 0.30 / 0.50 / 0.70). Replaced `min/max_hours_to_close` with `min/max_frac_of_life` (defaults 0.25, 0.55). Also dropped the hardcoded `categories=("sports","crypto")` filter — the gate handles correctness, scanning all categories collects more shadow data. |
 
 ## Pointers
 

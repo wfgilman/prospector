@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -235,6 +235,28 @@ def build_pnl_series(db_path: Path) -> pd.DataFrame:
     closed["close_time"] = pd.to_datetime(closed["close_time"], utc=True)
     closed["pnl"] = closed["realized_pnl"].cumsum()
     return closed.rename(columns={"close_time": "time"})[["time", "pnl"]]
+
+
+# -- shadow-ledger loader ---------------------------------------------------
+
+
+def load_shadow_ledger(shadow_root: Path, days: int = 7) -> pd.DataFrame:
+    """Read the shadow-rejection parquet, scoped to the last ``days`` days.
+
+    The parquet lives at ``<shadow_root>/shadow/shadow_rejections.parquet``
+    and accumulates one row per (ticker, day) for every structurally-rejected
+    candidate. Returns an empty DataFrame if the file doesn't exist yet.
+    """
+    path = shadow_root / "shadow" / "shadow_rejections.parquet"
+    if not path.exists():
+        return pd.DataFrame()
+    df = pd.read_parquet(path)
+    if df.empty:
+        return df
+    df["entry_time"] = pd.to_datetime(df["entry_time"], utc=True)
+    df["close_time"] = pd.to_datetime(df["close_time"], utc=True)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    return df[df["entry_time"] >= cutoff].reset_index(drop=True)
 
 
 # -- elder triple-screen (crypto_perp schema) loaders ----------------------
@@ -1369,8 +1391,8 @@ def _render_positions_tabs(db_path: Path, log_dir: Path) -> None:
     import streamlit as st
 
     st.markdown("<div style='height:2rem;'></div>", unsafe_allow_html=True)
-    tab_open, tab_closed, tab_ticks = st.tabs(
-        ["Open positions", "Closed positions", "Recent ticks"]
+    tab_open, tab_closed, tab_ticks, tab_screen = st.tabs(
+        ["Open positions", "Closed positions", "Recent ticks", "Screening"]
     )
     with tab_open:
         _render_open_positions(db_path)
@@ -1378,6 +1400,9 @@ def _render_positions_tabs(db_path: Path, log_dir: Path) -> None:
         _render_closed_positions(db_path)
     with tab_ticks:
         _render_tick_stream(log_dir)
+    with tab_screen:
+        # Shadow ledger lives at the book root (parent of the logs dir).
+        _render_screening(log_dir.parent)
 
 
 def _render_open_positions(db_path: Path) -> None:
@@ -1513,3 +1538,87 @@ def _render_tick_stream(log_dir: Path) -> None:
         ]
     )
     st.dataframe(tick_df, width="stretch", hide_index=True)
+
+
+def _render_screening(shadow_root: Path) -> None:
+    """Show *why* the daemon is shadow-rejecting candidates.
+
+    Reads the shadow-rejection parquet (one row per ticker per UTC day
+    rejected) and breaks it down by reject reason, category, and series.
+    The window is fixed at 7 days — tighter would dilute the signal on
+    low-tick-frequency books, longer would mix in regimes from prior
+    gate configurations.
+    """
+    import streamlit as st
+
+    df = load_shadow_ledger(shadow_root, days=7)
+    if df.empty:
+        st.caption(
+            "No shadow rejections in the last 7 days. The daemon either "
+            "hasn't run yet or every candidate cleared the structural "
+            "filters."
+        )
+        return
+
+    by_reason = df["reject_reason"].value_counts()
+    by_category = df["category"].value_counts()
+    top_series = df["series_ticker"].value_counts().head(10)
+
+    # 24h vs 7d split — same metric the user uses to decide whether the
+    # gate is producing healthy entry rates.
+    cutoff_24h = datetime.now(timezone.utc) - timedelta(hours=24)
+    last_24h = df[df["entry_time"] >= cutoff_24h]
+
+    st.markdown(
+        f"""
+        <div style="display:flex; gap:2rem; margin-bottom:0.75rem; flex-wrap:wrap;">
+            <div class="qt-cat-stat">
+                <div class="qt-cat-stat-label">Last 24h</div>
+                <div class="qt-cat-stat-value">{len(last_24h):,}</div>
+            </div>
+            <div class="qt-cat-stat">
+                <div class="qt-cat-stat-label">Last 7d</div>
+                <div class="qt-cat-stat-value">{len(df):,}</div>
+            </div>
+            <div class="qt-cat-stat">
+                <div class="qt-cat-stat-label">Distinct reasons</div>
+                <div class="qt-cat-stat-value">{by_reason.size}</div>
+            </div>
+            <div class="qt-cat-stat">
+                <div class="qt-cat-stat-label">Distinct categories</div>
+                <div class="qt-cat-stat-value">{by_category.size}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col_reason, col_cat = st.columns(2)
+    with col_reason:
+        st.markdown(
+            '<div class="qt-eyebrow">Reject reason · 7d</div>',
+            unsafe_allow_html=True,
+        )
+        reason_df = pd.DataFrame(
+            {"reason": by_reason.index, "count": by_reason.values}
+        )
+        st.dataframe(reason_df, width="stretch", hide_index=True)
+    with col_cat:
+        st.markdown(
+            '<div class="qt-eyebrow">Category · 7d</div>',
+            unsafe_allow_html=True,
+        )
+        cat_df = pd.DataFrame(
+            {"category": by_category.index, "count": by_category.values}
+        )
+        st.dataframe(cat_df, width="stretch", hide_index=True)
+
+    st.markdown("<div style='height:1rem;'></div>", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="qt-eyebrow">Top series rejected · 7d</div>',
+        unsafe_allow_html=True,
+    )
+    series_df = pd.DataFrame(
+        {"series": top_series.index, "count": top_series.values}
+    )
+    st.dataframe(series_df, width="stretch", hide_index=True)

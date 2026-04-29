@@ -12,6 +12,7 @@ from prospector.dashboard import (
     load_category_breakdown,
     load_portfolio_summary,
     load_positions,
+    load_shadow_ledger,
     load_tick_history,
 )
 from prospector.strategies.pm_underwriting.portfolio import (
@@ -261,3 +262,58 @@ def test_load_category_breakdown_mixed_positions(portfolio: PaperPortfolio) -> N
     assert int(crypto["wins"]) == 0
     assert int(crypto["losses"]) == 1
     assert crypto["realized_pnl"] < 0
+
+
+def test_load_shadow_ledger_missing(tmp_path: Path) -> None:
+    df = load_shadow_ledger(tmp_path, days=7)
+    assert df.empty
+
+
+def test_load_shadow_ledger_filters_window(tmp_path: Path) -> None:
+    """The 7-day window cuts off older rows so dashboards don't blend in
+    rejections from prior gate configurations."""
+    shadow_dir = tmp_path / "shadow"
+    shadow_dir.mkdir()
+    now = datetime.now(timezone.utc)
+    rows = pd.DataFrame(
+        [
+            # Recent (in window)
+            {
+                "ticker": "RECENT",
+                "event_ticker": "E",
+                "series_ticker": "KXNFL",
+                "category": "sports",
+                "side": "sell_yes",
+                "entry_price": 0.95,
+                "edge_pp": 6.0,
+                "sigma_bin": 0.5,
+                "risk_budget": 50.0,
+                "close_time": now + pd.Timedelta(hours=2),
+                "entry_time": now - pd.Timedelta(hours=4),
+                "reject_reason": "frac_gt_0.55",
+                "reject_date": (now - pd.Timedelta(hours=4)).strftime("%Y-%m-%d"),
+            },
+            # Old (out of window)
+            {
+                "ticker": "OLD",
+                "event_ticker": "E",
+                "series_ticker": "KXNFL",
+                "category": "sports",
+                "side": "sell_yes",
+                "entry_price": 0.92,
+                "edge_pp": 5.0,
+                "sigma_bin": 0.5,
+                "risk_budget": 30.0,
+                "close_time": now - pd.Timedelta(days=10),
+                "entry_time": now - pd.Timedelta(days=14),
+                "reject_reason": "ttc_gt_24h",  # legacy reason
+                "reject_date": (now - pd.Timedelta(days=14)).strftime("%Y-%m-%d"),
+            },
+        ]
+    )
+    rows.to_parquet(shadow_dir / "shadow_rejections.parquet", index=False)
+
+    df = load_shadow_ledger(tmp_path, days=7)
+    assert len(df) == 1
+    assert df.iloc[0]["ticker"] == "RECENT"
+    assert df.iloc[0]["reject_reason"] == "frac_gt_0.55"

@@ -16,7 +16,7 @@ duplication and stand on shoulders.
 
 | Project | Market | Strategy type | Status | Key metric |
 |---|---|---|---|---|
-| **kalshi-autoagent** | Kalshi PM | 5 structural arb strategies (two-loop) | Paper → live | $23K P&L, 290+ trades, 57% WR in 2 days |
+| **kalshi-autoagent** | Kalshi PM | 5 structural arb strategies + sports MM (two-loop) | Paper → live; **sports MM is the only currently-promising live track** (per friend, 2026-04-28) | Sports MM 134-event retrain: +71.8% bankroll, 11,949 fills, score 143.69 |
 | **kalshi-arb-trader** | Kalshi PM | Execution agent for autoagent configs | Live | — |
 | **crypto-copy-bot** | Hyperliquid + Kraken | Copy trading + funding arb | Live | ~60 trades/day |
 | **options-autoagent** | IBKR (options) | Constraint violation detection (two-loop) | Backtested | 100% WR composite, 95.8% EV |
@@ -36,7 +36,29 @@ constraint violations**:
 4. **Cross-event consistency** (74.6% WR) — NASDAQ↔INX, BTC↔ETH correlation-based
 5. **Cross-product consistency** (65.5% WR) — threshold vs bucket-sum identity
 
-Plus a **weather market maker** (zero maker fees, resting two-sided quotes).
+Plus a **multi-category market maker** (`strategies/market_maker.py`, zero
+maker fees, resting two-sided quotes). The maker has cycled through three
+target categories — only one is currently promising:
+
+- **Sports MM (KXMLBHRR / KXNHLGOAL / KXNBAPTS / KXMLBHIT / KXNHLFIRSTGOAL).**
+  As of 2026-04-28 this is the **only sibling strategy the friend describes
+  as showing live edge**. Pilot-quality at *baseline* (76% WR, +2% bankroll
+  before tuning); 134-event retrain validates no overfit (+71.8% bankroll,
+  score 143.69, 11,949 fills). Best config: `spread_width=0.12`,
+  `quote_size=2`, `max_inventory=10`, `min_minutes_to_settlement=30`,
+  static FV (rolling-FV pinned to 0 via `OPERATOR_OVERRIDES` — every time
+  the LLM raised it, score collapsed). Thesis: thin retail-driven prop
+  markets have wide enough spreads to cover adverse selection AND no
+  competing pro MM compressing them. See
+  `~/workspace/other-trading-projects/kalshi-autoagent/strategies/market_maker_sports_handoff.md`.
+- **Weather MM.** Live but marginal. Original target (zero adverse
+  selection on NWS-settled contracts) holds in principle; in practice
+  delivered the live execution lessons documented in `market_maker_live_qa.md`.
+- **Politics MM.** Declared **dead 2026-04-22** — every internal-FV variant
+  produced -18% to -48% returns; external-FV (polling aggregator) shelved
+  as not worth the build cost. See `MM_EXPANSION_PLAN.md` §Politics.
+- **Crypto MM.** Trained config exists (`config_market_maker_crypto_best.json`)
+  but never deployed live; informed-trader adverse selection too aggressive.
 
 **Implication:** Prospector should not rebuild these. Build strategies
 that **complement** them — especially cross-market strategies that use
@@ -214,3 +236,5 @@ and could be referenced (not imported wholesale — we own our own clients):
 | 2026-04-15 | Sibling-project survey before strategy selection | Don't duplicate; stand on shoulders |
 | 2026-04-22 | Built our own Kalshi client (no dependency on `kalshi-arb-trader`) | "Own every line that touches our data" — see [`platform/kalshi-client.md`](../platform/kalshi-client.md) |
 | 2026-04-25 | Doc moved from `rd/sibling-project-insights.md` to `reference/sibling-projects.md` | Reorg: this is project-wide reference info, not R&D |
+| 2026-04-28 | Sibling MM line refreshed — sports MM is the only currently-promising track | Friend confirmed verbally; Politics MM dead 2026-04-22, weather marginal, crypto never live |
+| 2026-04-29 | Sibling sports MM forked into prospector candidate [#17](../rd/candidates/17-kalshi-maker-bayesian.md) | User direction: replicate his strategy through our pipeline using a Bayesian optimizer (per axiom 5) instead of his LLM inner-loop. The replication is the deliverable; the verdict is the audit trail. |

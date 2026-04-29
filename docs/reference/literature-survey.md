@@ -79,6 +79,60 @@ maker fees on Kalshi. 40%+ of profit in final 14 days. Reduce exposure
 - HangukQuant: [Digital Option Market Making](https://www.research.hangukquant.com/p/digital-option-market-making-on-prediction)
 - Substack: [Mathematical Execution Behind Prediction Market Alpha](https://navnoorbawa.substack.com/p/the-mathematical-execution-behind)
 
+#### Optimal market-making theory (canonical)
+
+The mathematical backbone of every modern MM formulation, including the
+binary-contract case. Two complementary research programs:
+
+**Inventory-risk control (Avellaneda–Stoikov family).** Treats MM as a
+stochastic optimal-control problem: maximize expected utility of
+terminal P&L given inventory aversion. The 2008 paper derives the
+two-step procedure that every modern MM uses — (1) compute reservation
+price = mid − inventory × γσ²(T−t), (2) symmetric spread around
+reservation price tuned to fill-arrival intensity. Predecessors:
+Ho–Stoll 1981 (the original dealer problem), Stoikov–Sağlam 2009
+(option-MM extension), Cartea–Jaimungal–Penalva 2015 (textbook
+synthesis with model uncertainty + adverse-selection-aware refinements).
+
+- arxiv: [Avellaneda–Stoikov 2008 — High-frequency trading in a limit order book](https://people.orie.cornell.edu/sfs33/LimitOrderBook.pdf)
+- Cambridge: [Cartea, Jaimungal, Penalva — Algorithmic and High-Frequency Trading (2015)](https://sebastian.statistics.utoronto.ca/books/algo-and-hf-trading/) — chapter 10 is the practitioner translation
+- Hummingbot: [Practitioner Guide to the Avellaneda–Stoikov Strategy](https://hummingbot.org/blog/guide-to-the-avellaneda--stoikov-strategy/) — open-source crypto-MM implementation in production
+
+**Adverse-selection control (Glosten–Milgrom family).** Treats MM as a
+Bayesian inference problem: every order arrival is a signal about the
+true value, the MM updates its belief, and the bid-ask spread is
+exactly the cost of being wrong against informed flow. The 1985 paper
+proves a positive bid-ask spread emerges purely from informational
+asymmetry, even with risk-neutral zero-profit MMs. Foundation for
+every "toxicity-aware" quoting heuristic, including the friend's
+`toxicity_widen_threshold` mechanism.
+
+- JFE: [Glosten–Milgrom 1985 — Bid, ask and transaction prices in a specialist market](https://milgrom.people.stanford.edu/wp-content/uploads/1984/09/Bid-Ask-and-Transaction-Prices.pdf)
+
+**Reinforcement-learning MMs (modern).** Sidesteps closed-form by
+training a policy that maps order-book state → quote actions. Common
+in academic literature (DDPG, SAC, deep recurrent Q-networks) but
+bound by sim-to-real gap unless trained on real market replay. Less
+relevant to small-player Kalshi where the search budget for RL training
+exceeds what the strategy will ever earn — but useful as the upper
+bound on what optimal quoting can achieve given enough compute.
+
+- arxiv (1911.05892): [Reinforcement Learning for Market Making in a Multi-agent Dealer Market](https://arxiv.org/abs/1911.05892)
+- MDPI: [Deep Reinforcement Learning in Non-Markov Market-Making](https://www.mdpi.com/2227-9091/13/3/40)
+- arxiv (2509.12456): [RL-Based Market Making as Stochastic Control on Non-Stationary LOB](https://arxiv.org/html/2509.12456v1)
+
+**Implication for us:** the friend's `market_maker.py` implements a
+*radically simplified* Avellaneda–Stoikov: linear inventory skew (no
+γσ²(T−t) decay), static spread (no fill-arrival-intensity calibration),
+binary toxicity widening (no Glosten–Milgrom Bayesian update). It
+works because (a) zero maker fees absorb a lot of slop, (b) the
+particular sports-prop microstructure is forgiving, (c) all the
+sophisticated theory can't help if the search procedure that tunes the
+free parameters is the wrong tool. Adding more A–S complexity probably
+isn't the highest-ROI move; *replacing the LLM optimizer with Bayesian
+optimization* on the existing simple model is — see candidate
+[`17-kalshi-maker-bayesian`](../rd/candidates/17-kalshi-maker-bayesian.md).
+
 ### Favorite-Longshot Bias
 
 Decades of academic evidence: bettors overvalue longshots
@@ -235,6 +289,10 @@ weather convergence candidate](../rd/candidates/09-kalshi-cme-weather-convergenc
 | PM arbitrage | arxiv (2508.03474) | $40M+ extracted from Polymarket; combinatorial arb |
 | PM vs options | Moontower Meta | Vertical spreads replicate binary contracts |
 | PM market making | HangukQuant | Black-Scholes pricing for digital options on PMs |
+| Optimal MM (inventory) | Avellaneda–Stoikov 2008 | Reservation price + symmetric spread tuned to arrival intensity |
+| Optimal MM (textbook) | Cartea–Jaimungal–Penalva 2015 | Practitioner synthesis incl. model uncertainty + adverse selection |
+| Adverse-selection spread | Glosten–Milgrom 1985 | Bid-ask spread > 0 emerges from informational asymmetry alone |
+| RL market making | Spooner et al; Kumar 2020 | Sim-to-real gap; useful upper bound for compute-rich settings |
 | Longshot bias | JPE, Management Science | Systematic overpricing of low-probability events |
 | LST basis | JFM (Scharnowski) | Basis determinants, mean-reversion, price discovery |
 | Stablecoin depeg | NBER, BIS | Concentrated arb structure (6 players for USDT) |

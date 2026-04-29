@@ -36,6 +36,7 @@ For stage definitions and verdict criteria, see
 | 12 | [Kalshi maker-side reflexivity](candidates/12-kalshi-maker-reflexivity.md) | fresh-eyes T10 | tier-3 | Maker-side liquidity premium when flow compresses orderbook toward position limits |
 | 13 | [HIP-3 first-day-after-auction spread](candidates/13-hip3-first-day-spread.md) | fresh-eyes T11 | tier-3 | Dutch-auction launch spreads on Hyperliquid HIP-3 markets |
 | 14 | [LLM-scored attention premium](candidates/14-llm-attention-premium.md) | fresh-eyes T12 | tier-3 | Sentiment-weighted volume vs. DOGE/WLFI perp; narrower #4 reformulation |
+| 17 | [Kalshi sports MM with Bayesian optimizer](candidates/17-kalshi-maker-bayesian.md) | user direction 2026-04-29 | tier-1 | Replicate friend's sports MM (`kalshi-autoagent`) on our parquet tree, swap LLM optimizer for skopt GP+EI per axiom 5; three-tier pass criteria (replicate, BO-vs-random, walk-forward) |
 
 ## Outside the candidate framework
 

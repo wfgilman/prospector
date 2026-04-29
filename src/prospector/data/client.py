@@ -18,8 +18,14 @@ _TIMEOUT = 30.0  # seconds
 
 
 def _coin(name: str) -> str:
-    """Normalise 'BTC-PERP' → 'BTC' for API calls."""
-    return name.removesuffix("-PERP")
+    """Normalise 'BTC-PERP' or 'BTC_PERP' → 'BTC' for API calls.
+
+    The elder runner uses underscore-suffixed names (`BIGTIME_PERP`) as
+    parquet-friendly identifiers and passes them straight through to
+    `download_pair`. Without the underscore variant, those names reach
+    the Hyperliquid API as-is and the endpoint returns HTTP 500.
+    """
+    return name.removesuffix("-PERP").removesuffix("_PERP")
 
 
 class HyperliquidClient:
